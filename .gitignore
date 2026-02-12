@@ -10,4 +10,4 @@ wheels/
 .venv
 
 #documentation
-doc.md
+/documentation/doc.md
