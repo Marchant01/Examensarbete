@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-#documentation
+# Documentation
 /documentation/doc.md
+
+# Installed local models
+models/*

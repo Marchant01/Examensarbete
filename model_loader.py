@@ -14,3 +14,5 @@ def select_model():
 
     for model in models:
         print(model)
+
+    
