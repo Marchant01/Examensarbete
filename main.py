@@ -2,6 +2,7 @@ import onnxruntime as ort
 from transformers import AutoTokenizer
 from optimum.onnxruntime import ORTModelForCausalLM
 from onnxruntime import SessionOptions, GraphOptimizationLevel
+from model_loader import select_model
 
 def main():
     print("Hello from examensarbete!")
@@ -12,6 +13,8 @@ def main():
 
     so = ort.SessionOptions()
     so.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_LAYOUT
+
+    select_model()
 
     tokenizer = AutoTokenizer.from_pretrained(repo_id)
 
