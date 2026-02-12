@@ -13,4 +13,4 @@ wheels/
 /documentation/doc.md
 
 # Installed local models
-models/*
+models/*onnxruntime_profile__*.json
