@@ -9,17 +9,15 @@ def main():
     print("ORT version:", ort.__version__)
     print("Providers:", ort.get_available_providers())
 
-    repo_id = "onnx-community/Qwen2.5-0.5B-Instruct"
-
     so = ort.SessionOptions()
     so.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_LAYOUT
 
-    select_model()
+    model = select_model()
 
     tokenizer = AutoTokenizer.from_pretrained(repo_id)
 
     model = ORTModelForCausalLM.from_pretrained(
-        repo_id,
+        model,
         subfolder="onnx",
         file_name="model_fp16.onnx",
         providers=["CPUExecutionProvider"],
