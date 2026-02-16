@@ -2,19 +2,23 @@ import onnxruntime as ort
 from transformers import AutoTokenizer
 from optimum.onnxruntime import ORTModelForCausalLM
 from onnxruntime import SessionOptions, GraphOptimizationLevel
-from model_loader import select_model
-
+import model_loader
+ 
 def main():
-    print("Hello from examensarbete!")
     print("ORT version:", ort.__version__)
     print("Providers:", ort.get_available_providers())
+    
 
     so = ort.SessionOptions()
+    so.enable_profiling=True
+    session = onnxruntime.InferenceSession(
+        model,
+        sess_options=so,
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
     so.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_LAYOUT
 
-    model = select_model()
-
-    tokenizer = AutoTokenizer.from_pretrained(repo_id)
+    tokenizer = AutoTokenizer.from_pretrained(model)
 
     model = ORTModelForCausalLM.from_pretrained(
         model,

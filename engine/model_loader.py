@@ -1,41 +1,43 @@
 import os
 from huggingface_hub import list_models, snapshot_download
 
-def install_new_models():
-    print("Select a filter")
-    
-    model_filter = ["text-to-image", "text-generation", "image-to-image"]
-    print(*model_filter, sep=", ")
+MODEL_FILTERS = ["text-to-image", "text-generation", "image-to-image"]
 
-    selected = input()
-    print("listing models based on filter")
+def list_available_models(task: str, limit: int = 20):
+    if task not in MODEL_FILTERS:
+        raise ValueError(f"Uknown task")
 
-    models = list_models(limit=20, library="onnx", filter=selected)
+    models = list_models(limit=20, library="onnx", filter=task)
 
-    for model in models:
-        print(model.id)
+    return [{"id": m.id} for m in models]
 
-    print("Select a model to isntall with repo_id")
-    repo_id = input()
+def install_model(repo_id: str, task: str):
+    if task not in MODEL_FILTERS:
+        raise ValueError(f"Unknown task")
+    local_dir = f"models/{task}/{repo_id}"
+
     snapshot_download(repo_id=repo_id, 
-    local_dir=f"models/{selected}/{repo_id}",
+    local_dir=local_dir,
     )
-    
-    return f"Installed: {repo_id}"
 
-def select_model():
-    installed_models = [f for f in os.listdir("models/") if os.path.isdir(f)]
-    print(len(installed_models))
-    
-    if len(installed_models) < 1:
-        install_new_models()
+    model_name = repo_id.split("/")[-1]
 
-    print(installed_models, sep="\n")
-
-    selected_model = input()
-
-    return selected_model
+    return {
+        "repo_id": repo_id,
+        "task": task,
+        "model_name": model_name,
+        "installed_dir": local_dir
+    }
         
-        
-
-
+def list_installed_models(model_dir: str):
+    out = {}
+    for task in MODEL_FILTERS:
+        task_dir = os.path.join(model_dir, task)
+        if not os.path.isdir(task_dir):
+            out[task] = []
+            continue
+        out[task] = [
+            name for name in os.listdir(task_dir)
+            if os.path.isdir(os.path.join(task_dir, name))
+        ]
+    return out
