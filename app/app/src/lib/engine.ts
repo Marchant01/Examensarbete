@@ -1,22 +1,71 @@
+import { writable } from 'svelte/store';
 import { Command } from '@tauri-apps/plugin-shell'
 
-const cmd = Command.create('Python', [
-    '-u',
-    '../../engine/engine.py'
-]);
+export const engineEvents = writable<any[]>([]);
+export const engineRaw = writable<string[]>([]);
+export const engineErr = writable<string[]>([]);
 
-cmd.stdout.on("data", (line: string) => {
-    try {
-        const ev = JSON.parse(line);
-        console.log("ENGINE EVENT: " + ev)
-    } catch {
-        console.log("ENGINE RAW" + line)
+let child:any;
+
+// Starts the python engine and reads from the IO stream
+export async function startEngine() {
+    const cmd = Command.create('python3', [
+        '-u',
+        'engine/engine.py'
+    ],
+    {cwd: '../../..'}
+);
+
+    cmd.stdout.on("data", (line: string) => {
+        try {
+            const ev = JSON.parse(line);
+            engineEvents.update((xs) => [...xs, ev]);
+            console.log("ENGINE EVENT: " + ev);
+        } catch {
+            console.log("ENGINE RAW" + line);
+            engineRaw.update((xs) => [...xs, line]);
+        }
+    });
+
+    cmd.stderr.on("data", (line: string) => {
+        engineErr.update((xs) => [...xs, line]);
+        console.log("ENGINE STDERR: " + line);
+    });
+
+    child = await cmd.spawn();
+};
+
+export async function stopEngine() {
+    if (child) {
+        await child.kill();
     }
-});
+};
 
-cmd.stderr.on("data", (line: string) => {
-    console.log("ENGINE STDERR: " + line)
-});
+export async function sendJson(obj: unknown) {
+    if (!child) throw new Error("Engine not started");
+    await child.write(JSON.stringify(obj) + "\n");
+};
 
-const child = await cmd.spawn();
+export async function getModels(task: string, limit: number = 10) {
+    await sendJson({
+        id: crypto.randomUUID(),
+        cmd: "list_available_models",
+        args: {"task": task, "limit": limit}
+    });
+};
 
+export async function getFilters() {
+    await sendJson({
+        id: crypto.randomUUID(),
+        cmd: "list_model_filters",
+        args: {}
+    });
+};
+
+export async function installModel(repoID: string, task: string) {
+    await sendJson({
+        id: crypto.randomUUID(),
+        cmd: "install_model",
+        args: {"repo_id": repoID, "task": task}
+    })
+}

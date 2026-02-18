@@ -1,23 +1,33 @@
 import os
+import asyncio
 from huggingface_hub import list_models, snapshot_download
 
 MODEL_FILTERS = ["text-to-image", "text-generation", "image-to-image"]
 
-def list_available_models(task: str, limit: int = 20):
+async def list_available_models(task: str, limit: int = 20):
     if task not in MODEL_FILTERS:
         raise ValueError(f"Uknown task")
 
-    models = list_models(limit=20, library="onnx", filter=task)
+    models = await asyncio.to_thread(
+        list_models,
+        limit=limit, 
+        filter=(task, "onnx")
+    )
 
-    return [{"id": m.id} for m in models]
+    return [{
+        "id": m.id, 
+        "last_modified": m.last_modified, 
+        "downloads": m.downloads} for m in models]
 
-def install_model(repo_id: str, task: str):
+async def install_model(repo_id: str, task: str):
     if task not in MODEL_FILTERS:
         raise ValueError(f"Unknown task")
     local_dir = f"models/{task}/{repo_id}"
 
-    snapshot_download(repo_id=repo_id, 
-    local_dir=local_dir,
+    await asyncio.to_thread(
+        snapshot_download,
+        repo_id=repo_id, 
+        local_dir=local_dir
     )
 
     model_name = repo_id.split("/")[-1]
@@ -41,3 +51,6 @@ def list_installed_models(model_dir: str):
             if os.path.isdir(os.path.join(task_dir, name))
         ]
     return out
+
+def list_model_filters():
+    return MODEL_FILTERS
