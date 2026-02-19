@@ -13,7 +13,12 @@ export async function startEngine() {
         '-u',
         'engine/engine.py'
     ],
-    {cwd: '../../..'}
+    {
+        cwd: '../../..',
+        env: {
+            MODELS_DIR: 'models'
+        }
+    }
 );
 
     cmd.stdout.on("data", (line: string) => {
@@ -54,6 +59,16 @@ export async function getModels(task: string, limit: number = 10) {
     });
 };
 
+export async function getInstalledModels(task: string) {
+    await sendJson({
+        id: crypto.randomUUID(),
+        cmd: "list_installed_models",
+        args: {"task": task}
+    });
+};
+
+// Could be used for future features where more 
+// model categories are added and make it dynamic in the frontend
 export async function getFilters() {
     await sendJson({
         id: crypto.randomUUID(),
@@ -67,5 +82,5 @@ export async function installModel(repoID: string, task: string) {
         id: crypto.randomUUID(),
         cmd: "install_model",
         args: {"repo_id": repoID, "task": task}
-    })
-}
+    });
+};

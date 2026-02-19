@@ -3,15 +3,20 @@ import sys
 import os
 import traceback
 import asyncio
+from pathlib import Path
 
 from model_loader import list_available_models, install_model, list_installed_models, list_model_filters
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_MODELS_DIR = ROOT_DIR / "models"
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
 
 async def main():
-    models_dir = os.environ.get("MODELS_DIR", "models")
+    models_dir = Path(os.environ.get("MODELS_DIR", str(DEFAULT_MODELS_DIR))).expanduser()
+    models_dir.mkdir(parents=True, exist_ok=True)
 
     for line in sys.stdin:
         line = line.strip()
@@ -40,7 +45,7 @@ async def main():
                     "trace": traceback.format_exc()}})
 
             if cmd == "list_installed_models":
-                data = list_installed_models(models_dir)
+                data = list_installed_models(str(models_dir))
                 send({"id": req_id, "type": "done", "data": data})
                 continue
             
@@ -48,7 +53,7 @@ async def main():
                 task = args["task"]
                 repo_id = args["repo_id"]
                 try:
-                    model = await install_model(repo_id, task)
+                    model = await install_model(repo_id, task, str(models_dir))
                     send({"id": req_id, "type": "done", "data": {"model": model}})
                 except Exception as e:
                     send({

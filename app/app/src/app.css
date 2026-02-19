@@ -1,7 +1,27 @@
 @import "tailwindcss";
 
 @layer components {
+    .models {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        flex-direction: row;
+    }
+    .installed-model-selection {
+        width: 50%;
+        display: flex;
+        justify-content: space-between;
+        flex-direction: column;
+    }
+    .install-model-selection {
+        width: 50%;
+        display: flex;
+        justify-content: space-between;
+        flex-direction: column;
+    }
     .model-card {
+        display: grid;
+        flex-direction: column;
         font-size: medium;
     }
 }

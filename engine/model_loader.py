@@ -1,5 +1,5 @@
-import os
 import asyncio
+from pathlib import Path
 from huggingface_hub import list_models, snapshot_download
 
 MODEL_FILTERS = ["text-to-image", "text-generation", "image-to-image"]
@@ -19,15 +19,16 @@ async def list_available_models(task: str, limit: int = 20):
         "last_modified": m.last_modified, 
         "downloads": m.downloads} for m in models]
 
-async def install_model(repo_id: str, task: str):
+async def install_model(repo_id: str, task: str, model_dir: str):
     if task not in MODEL_FILTERS:
         raise ValueError(f"Unknown task")
-    local_dir = f"models/{task}/{repo_id}"
+    local_dir = Path(model_dir) / task / repo_id
+    local_dir.mkdir(parents=True, exist_ok=True)
 
     await asyncio.to_thread(
         snapshot_download,
         repo_id=repo_id, 
-        local_dir=local_dir
+        local_dir=str(local_dir)
     )
 
     model_name = repo_id.split("/")[-1]
@@ -36,19 +37,20 @@ async def install_model(repo_id: str, task: str):
         "repo_id": repo_id,
         "task": task,
         "model_name": model_name,
-        "installed_dir": local_dir
+        "installed_dir": str(local_dir)
     }
         
 def list_installed_models(model_dir: str):
     out = {}
+    model_root = Path(model_dir)
     for task in MODEL_FILTERS:
-        task_dir = os.path.join(model_dir, task)
-        if not os.path.isdir(task_dir):
+        task_dir = model_root / task
+        if not task_dir.is_dir():
             out[task] = []
             continue
         out[task] = [
-            name for name in os.listdir(task_dir)
-            if os.path.isdir(os.path.join(task_dir, name))
+            entry.name for entry in task_dir.iterdir()
+            if entry.is_dir()
         ]
     return out
 

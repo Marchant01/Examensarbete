@@ -14,7 +14,7 @@
 
 <nav>
     <a href="/models">Browse models</a>
-    <a href="/">Installed models</a>
+    <a href="/flows">Flow</a>
 </nav>
 
 <main>
