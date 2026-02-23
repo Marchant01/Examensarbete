@@ -54,5 +54,16 @@ def list_installed_models(model_dir: str):
         ]
     return out
 
+def find_onnx_model_path(model_root: str):
+    """
+    Recursively find first .onnx file in a model directory
+    """
+    model_root = Path(model_root)
+
+    for path in model_root.rglob("*.onnx"):
+        return str(path)
+
+    raise FileNotFoundError("No ONNX file found in model directory")
+
 def list_model_filters():
     return MODEL_FILTERS
