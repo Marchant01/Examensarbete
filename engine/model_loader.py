@@ -42,7 +42,7 @@ async def install_model(repo_id: str, task: str, model_dir: str):
         
 def list_installed_models(model_dir: str):
     out = {}
-    model_root = Path(model_dir)
+    model_root = Path(model_dzir)
     for task in MODEL_FILTERS:
         task_dir = model_root / task
         if not task_dir.is_dir():
@@ -54,16 +54,16 @@ def list_installed_models(model_dir: str):
         ]
     return out
 
-# def find_onnx_model_path(model_root: str):
-#     """
-#     Recursively find first .onnx file in a model directory
-#     """
-#     model_root = Path(model_root)
+def find_onnx_model_path(model_root: str):
+    """
+    Recursively find first .onnx file in a model directory
+    """
+    model_root = Path(model_root)
 
-#     for path in model_root.rglob("*.onnx"):
-#         return str(path)
+    for path in model_root.rglob("*.onnx"):
+        return str(path)
 
-#     raise FileNotFoundError("No ONNX file found in model directory")
+    raise FileNotFoundError("No ONNX file found in model directory")
 
 def list_model_filters():
     return MODEL_FILTERS

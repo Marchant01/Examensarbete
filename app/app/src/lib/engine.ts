@@ -9,9 +9,8 @@ let child:any;
 
 // Starts the python engine and reads from the IO stream
 export async function startEngine() {
-    const cmd = Command.create('python3', [
-        '-u',
-        'engine/engine.py'
+    const cmd = Command.create('bash', [
+        'engine/run.sh'
     ],
     {
         cwd: '../../..',
@@ -84,3 +83,22 @@ export async function installModel(repoID: string, task: string) {
         args: {"repo_id": repoID, "task": task}
     });
 };
+
+export async function loadModel(repoID: string, task: string) {
+    await sendJson({
+        id: crypto.randomUUID(),
+        cmd: "load_model",
+        args: {"repo_id": repoID, "task": task}
+    });
+};
+
+export async function clearLoadedModels() {
+    await sendJson({
+        id: crypto.randomUUID(),
+        cmd: "clear_loaded_models",
+        args: {}
+    });
+};
+
+// function for running the flow: 
+// export async function run_flow()

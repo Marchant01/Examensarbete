@@ -11,6 +11,7 @@
 
     $: models =
         [...$engineEvents]
+            .reverse()
             .find((ev) => ev?.type === "done" && ev?.data?.models)?.data?.models ?? [];
 
     $: installedModels =

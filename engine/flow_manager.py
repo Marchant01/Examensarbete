@@ -15,7 +15,6 @@ class BaseRunner:
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
 
-
     def _createSession(self):
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -45,6 +44,9 @@ class ModelRegistry:
 
     def list_loaded(self):
         return list(self._models.keys())
+
+    def clear_loaded_models(self):
+        return self._models.clear()
 
 model_registry = ModelRegistry()
 

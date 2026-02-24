@@ -5,7 +5,13 @@ import traceback
 import asyncio
 from pathlib import Path
 
-from model_loader import list_available_models, list_installed_models, install_model, list_model_filters
+from model_loader import (
+    list_available_models, 
+    list_installed_models, 
+    install_model, 
+    list_model_filters,
+    find_onnx_model_path
+)
 
 # from flow_manager import model_registry, run_flow
 
@@ -70,26 +76,48 @@ async def main():
                 send({"id": req_id, "type": "done", "data": {"filters": filters}})
                 continue
 
-            # if cmd == "load_model":
-            #     task = args["task"]
-            #     repo_id = args["repo_id"]
+            if cmd == "load_model":
+                task = args["task"]
+                repo_id = args["repo_id"]
+                try:
+                    model_path_root = models_dir / task / repo_id
+                    onnx_path = find_onnx_model_path(str(model_path_root))
+                    model_registry.load(repo_id, onnx_path)
+                    send({"id": req_id, "type": "done", "data": {"loaded": repo_id}})
+                except Exception as e:
+                    send({
+                        "id": req_id,
+                        "type": "error",
+                        "data": {"message": str(e), "trace": traceback.format_exc()}
+                    })
+                continue
 
-            #     model_path_root = models_dir / task / repo_id
-            #     onnx_path = find_onnx_model_path(str(model_path_root))
+            if cmd == "clear_loaded_models":
+                try:
+                    model_registry.clear_loaded_models()
+                    send({"id": req_id, "type": done, "data": "cleared"})
+                except Exception as e:
+                    send({
+                        "id": req_id,
+                        "type": "error",
+                        "data": {"message": str(e), "trace": traceback.format_exc()}
+                    })
 
-            #     model_registry.load(repo_id, onnx_path)
+            if cmd == "run_flow":
+                try:
+                    flow = args["flow"]
+                    initial_input = args["input"]
 
-            #     send({"id": req_id, "type": "done", "data": {"loaded": repo_id}})
-            #     continue
+                    result = run_flow(flow, initial_input)
 
-            # if cmd == "run_flow":
-            #     flow = args["flow"]
-            #     initial_input = args["input"]
-
-            #     result = run_flow(flow, initial_input)
-
-            #     send({"id": req_id, "type": "done", "data": {"outputs": result}})
-            #     continue
+                    send({"id": req_id, "type": "done", "data": {"outputs": result}})
+                except Exception as e:
+                    send({
+                        "id": req_id,
+                        "type": "error",
+                        "data": {"message": str(e), "trace": traceback.format_exc()}
+                    })
+                continue
 
             send({"id": req_id, "type": "error", "data": {"message": f"Unknown cmd: {cmd}"}})
         

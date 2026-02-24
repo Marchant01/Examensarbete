@@ -12,12 +12,11 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "python3",
-          "cmd": "python3",
+          "name": "bash",
+          "cmd": "bash",
           "args": [
-            "-u",
             {
-              "validator": "\\S+"
+              "validator": ".*"
             }
           ]
         }
