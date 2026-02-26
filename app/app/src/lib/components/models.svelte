@@ -27,7 +27,7 @@
     $: installedForSelected = installedModels[selectedInstalled] ?? [];
 
     onMount(() => {
-        getInstalledModels(selectedInstalled);
+        getInstalledModels();
     });
 
     function normalizeLimit(value: number): number {
@@ -42,7 +42,7 @@
 
     async function installByTask(repoID: string) {
         await installModel(repoID, selectedAvailable);
-        await getInstalledModels(selectedInstalled);
+        await getInstalledModels();
     }
 
 </script>

@@ -58,11 +58,11 @@ export async function getModels(task: string, limit: number = 10) {
     });
 };
 
-export async function getInstalledModels(task: string) {
+export async function getInstalledModels() {
     await sendJson({
         id: crypto.randomUUID(),
         cmd: "list_installed_models",
-        args: {"task": task}
+        args: {}
     });
 };
 
@@ -84,11 +84,11 @@ export async function installModel(repoID: string, task: string) {
     });
 };
 
-export async function loadModel(repoID: string, task: string) {
+export async function loadModel(repoID: string) {
     await sendJson({
         id: crypto.randomUUID(),
         cmd: "load_model",
-        args: {"repo_id": repoID, "task": task}
+        args: {"repo_id": repoID}
     });
 };
 
@@ -100,5 +100,10 @@ export async function clearLoadedModels() {
     });
 };
 
-// function for running the flow: 
-// export async function run_flow()
+export async function runFlow(flow: any[], input: any) {
+    await sendJson({
+        id: crypto.randomUUID(),
+        cmd: "run_flow",
+        args: {"flow": flow, "input": input}
+    });
+};
