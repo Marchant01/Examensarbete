@@ -39,31 +39,36 @@ async def install_model(repo_id: str, task: str, model_dir: str):
         "model_name": model_name,
         "installed_dir": str(local_dir)
     }
-        
-def list_installed_models(model_dir: str):
+
+def list_installed_models(model_dir: str) -> dict:
     out = {}
-    model_root = Path(model_dzir)
+    model_root = Path(model_dir)
     for task in MODEL_FILTERS:
         task_dir = model_root / task
         if not task_dir.is_dir():
             out[task] = []
             continue
         out[task] = [
-            entry.name for entry in task_dir.iterdir()
-            if entry.is_dir()
+            f"{author.name}/{model.name}"
+            for author in task_dir.iterdir()
+            if author.is_dir()
+            for model in author.iterdir()
+            if model.is_dir()
         ]
     return out
 
-def find_onnx_model_path(model_root: str):
+def find_onnx_model_path(repo_id: str) -> str:
     """
-    Recursively find first .onnx file in a model directory
+    Find directory matching repo_id anywhere under models_root
     """
-    model_root = Path(model_root)
+    for path in repo_id.rglob(repo_id):
+        if path.is_dir() and path.name == repo_id:
+            return str(path)
 
-    for path in model_root.rglob("*.onnx"):
-        return str(path)
-
-    raise FileNotFoundError("No ONNX file found in model directory")
+    raise FileNotFoundError(f"Model directory '{repo_id}' not found")
 
 def list_model_filters():
     return MODEL_FILTERS
+
+async def onnx_converter():
+    pass

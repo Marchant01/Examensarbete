@@ -13,8 +13,6 @@ from model_loader import (
     find_onnx_model_path
 )
 
-# from flow_manager import model_registry, run_flow
-
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MODELS_DIR = ROOT_DIR / "models"
 
@@ -77,10 +75,8 @@ async def main():
                 continue
 
             if cmd == "load_model":
-                task = args["task"]
                 repo_id = args["repo_id"]
                 try:
-                    model_path_root = models_dir / task / repo_id
                     onnx_path = find_onnx_model_path(str(model_path_root))
                     model_registry.load(repo_id, onnx_path)
                     send({"id": req_id, "type": "done", "data": {"loaded": repo_id}})

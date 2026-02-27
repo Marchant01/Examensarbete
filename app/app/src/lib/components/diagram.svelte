@@ -43,13 +43,6 @@
         };
     };
 
-    // Adds the model and the steps to a list for tracking the 
-    // async function addFlow() {
-    //     flowList.push({
-    //         flow_steps: [selectedModel]
-    //     });
-    // };
-
     async function executeFlow() {
         runFlow(flowList, initial_input)
     }
@@ -75,7 +68,7 @@
         <p>Select a model to load</p>
         {:else}
         {#each loadedModels as loadedModel}
-            <h1>{loadedModel}</h1>
+            <h1>{loadedModel}</h1> 
         {/each}
         {/if}
     </div>
