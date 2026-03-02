@@ -6,12 +6,12 @@ import asyncio
 from pathlib import Path
 
 from model_loader import (
-    list_available_models, 
-    list_installed_models, 
-    install_model, 
+    list_available_models,
+    list_installed_models,
+    install_model,
     list_model_filters,
-    find_onnx_model_path
 )
+from flow_manager import model_registry, run_flow
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MODELS_DIR = ROOT_DIR / "models"
@@ -29,6 +29,7 @@ async def main():
         if not line:
             continue
 
+        req = {}
         try:
             req = json.loads(line)
             req_id = req.get("id", "unknown")
@@ -40,14 +41,18 @@ async def main():
                 limit = int(args.get("limit", 20))
                 try:
                     models = await list_available_models(task, limit)
-                    send({"id": req_id, 
-                    "type": "done", 
-                    "data": {"models": models}})
+                    send({
+                        "id": req_id, 
+                        "type": "done", 
+                        "data": {"models": models}
+                    })
                 except Exception as e:
-                    send({"id": req_id, 
-                    "type": "error", 
-                    "data": {"message": str(e), 
-                    "trace": traceback.format_exc()}})
+                    send({
+                        "id": req_id, 
+                        "type": "error", 
+                        "data": {"message": str(e), 
+                        "trace": traceback.format_exc()}
+                    })
                 continue
 
             if cmd == "list_installed_models":
@@ -60,7 +65,11 @@ async def main():
                 repo_id = args["repo_id"]
                 try:
                     model = await install_model(repo_id, task, str(models_dir))
-                    send({"id": req_id, "type": "done", "data": {"model": model}})
+                    send({
+                        "id": req_id, 
+                        "type": "done", 
+                        "data": {"model": model}
+                    })
                 except Exception as e:
                     send({
                         "id": req_id,
@@ -76,16 +85,14 @@ async def main():
 
             if cmd == "load_model":
                 repo_id = args["repo_id"]
+                task = args["task"]
+                provider = args.get("provider", "CPUExecutionProvider")
                 try:
-                    onnx_path = find_onnx_model_path(str(model_path_root))
-                    model_registry.load(repo_id, onnx_path)
+                    await asyncio.to_thread(model_registry.load, repo_id, task, provider)
                     send({"id": req_id, "type": "done", "data": {"loaded": repo_id}})
                 except Exception as e:
-                    send({
-                        "id": req_id,
-                        "type": "error",
-                        "data": {"message": str(e), "trace": traceback.format_exc()}
-                    })
+                    send({"id": req_id, "type": "error",
+                          "data": {"message": str(e), "trace": traceback.format_exc()}})
                 continue
 
             if cmd == "clear_loaded_models":
@@ -103,9 +110,7 @@ async def main():
                 try:
                     flow = args["flow"]
                     initial_input = args["input"]
-
-                    result = run_flow(flow, initial_input)
-
+                    result = await asyncio.to_thread(run_flow, flow, initial_input)
                     send({"id": req_id, "type": "done", "data": {"outputs": result}})
                 except Exception as e:
                     send({
