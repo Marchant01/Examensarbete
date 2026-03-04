@@ -1,4 +1,5 @@
 import asyncio
+import onnxruntime as ort
 from typing import Any, Dict, List, Optional
 from transformers import pipeline as hf_pipeline
 from optimum.onnxruntime import (
@@ -10,6 +11,7 @@ from optimum.onnxruntime import (
 )
 from model_loader import TASK_CONFIG
 
+print(ort.__version__)
 
 def _try_import_diffusion():
     try:
@@ -41,7 +43,7 @@ class ModelRunner:
             if cls is None:
                 raise ImportError("Install optimum[diffusers] for diffusion model support.")
             # Diffusion pipelines are self-contained (tokenizer + scheduler + unet etc.)
-            return cls.from_pretrained(repo_id, provider=provider)
+            return cls.from_pretrained(repo_id, providers=[provider], subfolder="onnx")
 
         cfg = TASK_CONFIG.get(task)
         if cfg is None:
@@ -51,24 +53,48 @@ class ModelRunner:
         processor_fn = cfg["processor_fn"]
         pipeline_task = cfg["pipeline_task"]
 
-        model = ort_class.from_pretrained(repo_id, provider=provider)
+        model = ort_class.from_pretrained(repo_id, providers=[provider], subfolder="onnx")
         processor = processor_fn(repo_id)
 
         # Build a standard HF pipeline backed by the ORT model.
         # This handles tokenization, batching, and decoding automatically.
-        return hf_pipeline(pipeline_task, model=model, tokenizer=processor)
+        return hf_pipeline(pipeline_task, model=model, tokenizer=processor, device='cpu')
 
     def run(self, inputs: Any) -> Any:
-        """
-        Run inference. `inputs` should match what the underlying HF pipeline expects:
-          - text-generation / text-to-text : str or list[str]
-          - image-classification           : PIL.Image or file path or URL
-          - text-to-image                  : str prompt
-          - image-to-image                 : {"image": PIL.Image, "prompt": str}
-          - feature-extraction             : str or list[str]
-        Returns the raw pipeline output (list of dicts / PIL images / tensors).
-        """
-        return self._pipe(inputs)
+        output = self._pipe(inputs)
+
+        # ---- TEXT GENERATION ----
+        if self.task in ("text-generation", "text-to-text"):
+            if isinstance(output, list) and len(output) > 0:
+                first = output[0]
+                if "generated_text" in first:
+                    return first["generated_text"]
+                if "translation_text" in first:
+                    return first["translation_text"]
+                if "summary_text" in first:
+                    return first["summary_text"]
+
+        # ---- TEXT CLASSIFICATION ----
+        if self.task == "text-classification":
+            if isinstance(output, list) and len(output) > 0:
+                return output[0]["label"]
+
+        # ---- FEATURE EXTRACTION ----
+        if self.task == "feature-extraction":
+            return output[0]
+
+        # ---- IMAGE CLASSIFICATION ----
+        if self.task == "image-classification":
+            if isinstance(output, list) and len(output) > 0:
+                return output[0]["label"]
+
+        # ---- DIFFUSION ----
+        if self.task in ("text-to-image", "image-to-image"):
+            # Diffusion pipelines return object with .images
+            if hasattr(output, "images"):
+                return output.images[0]
+
+        return output
 
 class ModelRegistry:
     """Keeps loaded ModelRunner instances in memory to avoid reloading."""
