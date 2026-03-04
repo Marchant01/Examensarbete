@@ -84,11 +84,11 @@ export async function installModel(repoID: string, task: string) {
     });
 };
 
-export async function loadModel(repoID: string) {
+export async function loadModel(repoID: string, task: string) {
     await sendJson({
         id: crypto.randomUUID(),
         cmd: "load_model",
-        args: {"repo_id": repoID}
+        args: {"repo_id": repoID, "task": task}
     });
 };
 
