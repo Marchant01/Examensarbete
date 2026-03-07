@@ -12,10 +12,11 @@ wheels/
 
 # Virtual environments
 .venv/
-venv/
+**/.venv/
 
 # uv
 .uv/
+**/.uv/
 
 # Python tooling
 .mypy_cache/
