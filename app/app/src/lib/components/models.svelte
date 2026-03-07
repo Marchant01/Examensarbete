@@ -47,7 +47,7 @@
 
 </script>
 
-<div class="models">
+<div class="models-container">
     <div class="installed-model-selection">
         <h2>Installed models</h2>
         <h3>Filter</h3>

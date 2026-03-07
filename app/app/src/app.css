@@ -25,3 +25,89 @@
         font-size: medium;
     }
 } */
+
+@import "tailwindcss";
+
+.diagram-container {
+    @apply flex flex-col gap-6 p-6 w-full;
+}
+
+.tool-bar {
+    @apply flex flex-row flex-wrap items-center gap-3;
+}
+
+.tool-bar select {
+    @apply rounded-md border border-gray-300 px-3 py-2 text-sm bg-white;
+}
+
+.tool-bar button {
+    @apply rounded-md px-4 py-2 text-sm font-medium bg-gray-100 
+        hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed;
+}
+
+.run-btn {
+    @apply bg-blue-600 hover:bg-blue-700 ml-auto;
+}
+
+/* ── Diagram: nodes in a row with connectors ── */
+.diagram {
+    @apply flex flex-row items-center gap-2 flex-wrap
+        min-h-24 rounded-xl border border-dashed border-gray-300 p-4;
+}
+
+.connector {
+    @apply text-gray-400 text-xl font-bold;
+}
+
+.flow-node {
+    @apply relative flex flex-col gap-1 rounded-lg border border-gray-300
+        bg-white px-4 py-3 text-sm shadow-sm min-w-36;
+}
+
+.flow-node.loaded {
+    @apply border-green-500 bg-green-50;
+}
+
+/* ── IO Panel: side by side ── */
+.io-panel {
+    @apply flex flex-row gap-4;
+}
+
+.io-input {
+    @apply flex flex-col gap-2 flex-1;
+}
+
+.main-nav-container {
+    @apply flex w-full items-center justify-center py-4
+}
+
+.main-nav-container button {
+    @apply rounded-md bg-blue-600
+}
+
+.main-nav {
+    @apply flex flex-row flex-wrap gap-2 items-center 
+           border border-gray-200 rounded-full px-2 py-1.5 bg-gray-50;
+}
+
+.main-nav a {
+    @apply px-4 py-1.5 rounded-full text-sm font-medium text-gray-600 text-xl
+           hover:bg-white hover:text-gray-900 hover:shadow-sm
+           transition-all duration-150;
+}
+
+.models-container {
+    @apply flex flex-row gap-6 p-6 w-full justify-center
+}
+
+.installed-model-selection {
+    @apply flex flex-col gap-4  
+}
+
+.install-model-selection {
+    @apply flex flex-col 
+}
+
+.model-card {
+    @apply flex flex-col 
+}

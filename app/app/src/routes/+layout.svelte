@@ -12,10 +12,12 @@
     });
 </script>
 
-<nav>
+<div class="main-nav-container">
+  <nav class="main-nav">
     <a href="/models">Browse models</a>
     <a href="/flows">Flow</a>
-</nav>
+  </nav>
+</div>
 
 <main>
     <slot />
