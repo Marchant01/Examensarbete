@@ -8,8 +8,7 @@ dependencies = [
     "huggingface-hub>=0.20.0",
     "numpy>=1.26.0",
     "onnx>=1.20.1",
-    "onnxruntime>=1.24.1",
     "optimum[onnxruntime]>=2.1.0",
-    "torch>=2.10.0",
+    "torch>=2.10.0; sys_platform == 'linux'",
     "transformers>=4.36.0,<4.58.0",
 ]

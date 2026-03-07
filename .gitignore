@@ -28,7 +28,7 @@ wheels/
 Thumbs.db
 
 # Local models
-models/
+/models/
 
 # Environment variables
 .env
