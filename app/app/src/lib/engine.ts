@@ -9,8 +9,8 @@ let child:any;
 
 // Starts the python engine and reads from the IO stream
 export async function startEngine() {
-    const cmd = Command.create('bash', [
-        'engine/run.sh'
+    const cmd = Command.create('python', [
+        'engine/engine.py'
     ],
     {
         cwd: '../../..',

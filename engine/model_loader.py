@@ -1,7 +1,8 @@
 import asyncio
+import onnxruntime as ort
 from pathlib import Path
-from huggingface_hub import list_models, snapshot_download
-from transformers import AutoTokenizer, AutoProcessor, AutoFeatureExtractor, pipeline
+from huggingface_hub import list_models
+from transformers import AutoTokenizer, AutoFeatureExtractor
 from optimum.onnxruntime import (
     ORTModelForCausalLM,
     ORTModelForSeq2SeqLM,
@@ -18,6 +19,8 @@ def _try_import_diffusion():
         return None, None
 
 # MODEL_FILTERS = ["text-to-image", "text-generation", "image-to-image"]
+
+print(ort.get_available_providers())
 
 TASK_CONFIG = {
     "text-generation": {

@@ -12,8 +12,8 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "bash",
-          "cmd": "bash",
+          "name": "python",
+          "cmd": "python",
           "args": [
             {
               "validator": ".*"

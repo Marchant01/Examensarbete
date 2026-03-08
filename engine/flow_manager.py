@@ -30,7 +30,7 @@ class ModelRunner:
     .run(input) accepts plain Python values and returns plain Python values
     suitable for chaining to the next step.
     """
-    def __init__(self, repo_id: str, task: str, provider: str = "CPUExecutionProvider"):
+    def __init__(self, repo_id: str, task: str, provider: str = "QNNExecutionProvider"):
         self.repo_id = repo_id
         self.task = task
         self.provider = provider
@@ -53,12 +53,18 @@ class ModelRunner:
         processor_fn = cfg["processor_fn"]
         pipeline_task = cfg["pipeline_task"]
 
-        model = ort_class.from_pretrained(repo_id, providers=[provider], subfolder="onnx")
+        # Session Options
+        so = ort.SessionOptions()
+        so.enable_profiling = True
+        # , provider_options=[{"backend_path": "QnnHtp.dll"}]
+
+        model = ort_class.from_pretrained(repo_id, session_options=so, providers=[provider], provider_options=[{"backend_path": "QnnHtp.dll"}], subfolder="onnx")
+        print(model.model.get_providers())
         processor = processor_fn(repo_id)
 
         # Build a standard HF pipeline backed by the ORT model.
         # This handles tokenization, batching, and decoding automatically.
-        return hf_pipeline(pipeline_task, model=model, tokenizer=processor, device='cpu')
+        return hf_pipeline(pipeline_task, model=model, tokenizer=processor)
 
     def run(self, inputs: Any) -> Any:
         output = self._pipe(inputs)
@@ -102,7 +108,7 @@ class ModelRegistry:
     def __init__(self):
         self._runners: Dict[str, ModelRunner] = {}
 
-    def load(self, model_id: str, task: str, provider: str = "CPUExecutionProvider") -> ModelRunner:
+    def load(self, model_id: str, task: str, provider: str = "QNNExecutionProvider") -> ModelRunner:
         if model_id not in self._runners:
             self._runners[model_id] = ModelRunner(model_id, task, provider)
         return self._runners[model_id]
