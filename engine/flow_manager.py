@@ -1,6 +1,7 @@
 import asyncio
 import onnxruntime as ort
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 from transformers import pipeline as hf_pipeline
 from optimum.onnxruntime import (
     ORTModelForCausalLM,
@@ -30,20 +31,26 @@ class ModelRunner:
     .run(input) accepts plain Python values and returns plain Python values
     suitable for chaining to the next step.
     """
-    def __init__(self, repo_id: str, task: str, provider: str = "QNNExecutionProvider"):
+    def __init__(self, repo_id: str, task: str):
         self.repo_id = repo_id
         self.task = task
-        self.provider = provider
-        self._pipe = self._load(repo_id, task, provider)
+        self._pipe = self._load(repo_id, task)
     
-    def _load(self, repo_id: str, task: str, provider: str):
+    def _load(self, repo_id: str, task: str):
         if task in ("text-to-image", "image-to-image"):
             OrtDiff, OrtImg2Img = _try_import_diffusion()
             cls = OrtImg2Img if task == "image-to-image" else OrtDiff
             if cls is None:
                 raise ImportError("Install optimum[diffusers] for diffusion model support.")
             # Diffusion pipelines are self-contained (tokenizer + scheduler + unet etc.)
-            return cls.from_pretrained(repo_id, providers=[provider], subfolder="onnx")
+            return cls.from_pretrained(repo_id, 
+                providers=["QNNExecutionProvider"], 
+                provider_options = [{
+                    "backend_path": "QnnHtp.dll",
+                    "htp_performance_mode": "burst",
+                    "enable_htp_fp16_precision": "1",
+                }], 
+                subfolder="onnx")
 
         cfg = TASK_CONFIG.get(task)
         if cfg is None:
@@ -56,9 +63,18 @@ class ModelRunner:
         # Session Options
         so = ort.SessionOptions()
         so.enable_profiling = True
-        # , provider_options=[{"backend_path": "QnnHtp.dll"}]
+        so.add_session_config_entry("ep.context_embed_mode", "1")
+        so.add_session_config_entry("ep.context_enable", "1")
 
-        model = ort_class.from_pretrained(repo_id, session_options=so, providers=[provider], provider_options=[{"backend_path": "QnnHtp.dll"}], subfolder="onnx")
+        model = ort_class.from_pretrained(
+            repo_id, session_options=so, 
+            providers=["QNNExecutionProvider"], 
+            provider_options = [{
+            "backend_path": "QnnHtp.dll",
+            "htp_performance_mode": "high_performance",
+            "enable_htp_fp16_precision": "1",
+        }])
+
         print(model.model.get_providers())
         processor = processor_fn(repo_id)
 
@@ -108,9 +124,9 @@ class ModelRegistry:
     def __init__(self):
         self._runners: Dict[str, ModelRunner] = {}
 
-    def load(self, model_id: str, task: str, provider: str = "QNNExecutionProvider") -> ModelRunner:
+    def load(self, model_id: str, task: str) -> ModelRunner:
         if model_id not in self._runners:
-            self._runners[model_id] = ModelRunner(model_id, task, provider)
+            self._runners[model_id] = ModelRunner(model_id, task)
         return self._runners[model_id]
 
     def get(self, model_id: str) -> Optional[ModelRunner]:

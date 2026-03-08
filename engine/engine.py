@@ -86,9 +86,8 @@ async def main():
             if cmd == "load_model":
                 repo_id = args["repo_id"]
                 task = args["task"]
-                provider = args.get("provider", "CPUExecutionProvider")
                 try:
-                    await asyncio.to_thread(model_registry.load, repo_id, task, provider)
+                    await asyncio.to_thread(model_registry.load, repo_id, task)
                     send({"id": req_id, "type": "done", "data": {"loaded": repo_id}})
                 except Exception as e:
                     send({"id": req_id, "type": "error",
