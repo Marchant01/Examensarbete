@@ -33,3 +33,6 @@ Thumbs.db
 # Environment variables
 .env
 .env.*
+
+# Onnxruntime model profiling
+onnxruntime_profiling__*.json
