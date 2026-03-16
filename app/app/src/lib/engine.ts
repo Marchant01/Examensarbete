@@ -1,53 +1,78 @@
 import { writable } from 'svelte/store';
-import { Command } from '@tauri-apps/plugin-shell'
+import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 export const engineEvents = writable<any[]>([]);
 export const engineRaw = writable<string[]>([]);
 export const engineErr = writable<string[]>([]);
 
-let child:any;
+let startPromise: Promise<void> | null = null;
+let listenersPromise: Promise<void> | null = null;
+let unlistenFns: UnlistenFn[] = [];
+
+async function ensureListeners() {
+    if (listenersPromise) return listenersPromise;
+
+    listenersPromise = (async () => {
+        const stdoutUnlisten = await listen<string>("engine-stdout", (event) => {
+            const line = event.payload;
+
+            try {
+                const ev = JSON.parse(line);
+                engineEvents.update((xs) => [...xs, ev]);
+                console.log("ENGINE EVENT:", ev);
+            } catch {
+                console.log("ENGINE RAW", line);
+                engineRaw.update((xs) => [...xs, line]);
+            }
+        });
+
+        const stderrUnlisten = await listen<string>("engine-stderr", (event) => {
+            const line = event.payload;
+            engineErr.update((xs) => [...xs, line]);
+            console.log("ENGINE STDERR:", line);
+        });
+
+        unlistenFns = [stdoutUnlisten, stderrUnlisten];
+    })();
+
+    return listenersPromise;
+}
 
 // Starts the python engine and reads from the IO stream
 export async function startEngine() {
-    const cmd = Command.create('python', [
-        'engine/engine.py'
-    ],
-    {
-        cwd: '../../..',
-        env: {
-            MODELS_DIR: 'models'
-        }
-    }
-);
+    if (startPromise) return startPromise;
 
-    cmd.stdout.on("data", (line: string) => {
+    startPromise = (async () => {
         try {
-            const ev = JSON.parse(line);
-            engineEvents.update((xs) => [...xs, ev]);
-            console.log("ENGINE EVENT: " + ev);
-        } catch {
-            console.log("ENGINE RAW" + line);
-            engineRaw.update((xs) => [...xs, line]);
+            await ensureListeners();
+            await invoke('start_engine');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            engineErr.update((xs) => [...xs, message]);
+            console.log("ENGINE START ERROR:", message);
+            throw error;
+        } finally {
+            startPromise = null;
         }
-    });
+    })();
 
-    cmd.stderr.on("data", (line: string) => {
-        engineErr.update((xs) => [...xs, line]);
-        console.log("ENGINE STDERR: " + line);
-    });
-
-    child = await cmd.spawn();
+    return startPromise;
 };
 
 export async function stopEngine() {
-    if (child) {
-        await child.kill();
+    await invoke('stop_engine');
+
+    for (const unlisten of unlistenFns) {
+        unlisten();
     }
+    unlistenFns = [];
+    listenersPromise = null;
 };
 
 export async function sendJson(obj: unknown) {
-    if (!child) throw new Error("Engine not started");
-    await child.write(JSON.stringify(obj) + "\n");
+    await startEngine();
+    await invoke('send_engine_json', { payload: obj });
 };
 
 export async function getModels(task: string, limit: number = 10) {
