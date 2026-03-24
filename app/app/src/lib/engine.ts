@@ -6,6 +6,13 @@ export const engineEvents = writable<any[]>([]);
 export const engineRaw = writable<string[]>([]);
 export const engineErr = writable<string[]>([]);
 
+export type TextToImageInput = {
+    prompt: string;
+    num_steps: number;
+    guidance_scale: number;
+    seed: number;
+};
+
 let startPromise: Promise<void> | null = null;
 let listenersPromise: Promise<void> | null = null;
 let unlistenFns: UnlistenFn[] = [];

@@ -29,8 +29,11 @@ STABLE_DIFFUSION_MODEL_ID = "stable-diffusion"
 STABLE_DIFFUSION_HF_REPO = "sd2-community/stable-diffusion-2-1-base"
 STABLE_DIFFUSION_DEFAULT_STEPS = 20
 STABLE_DIFFUSION_DEFAULT_SEED = 41
+STABLE_DIFFUSION_DEFAULT_GUIDANCE_SCALE = 7.5
 STABLE_DIFFUSION_BUILD_DIR = "stable_diffusion_v2_1_w8a16"
 STABLE_DIFFUSION_TARGET = "qualcomm-snapdragon-x-elite"
+STABLE_DIFFUSION_SCHEDULER_SUBFOLDER = "scheduler"
+STABLE_DIFFUSION_SCHEDULER_CONFIG_NAME = "scheduler_config.json"
 QUALCOMM_REFERENCE_ONNXRUNTIME_QNN_VERSION = "1.24.4"
 
 
@@ -118,6 +121,11 @@ def resolve_stable_diffusion_assets(models_dir: str | Path | None = None) -> dic
         text_encoder = candidate / "text_encoder" / "model.onnx"
         unet = candidate / "unet" / "model.onnx"
         vae_decoder = candidate / "vae_decoder" / "model.onnx"
+        scheduler_config = (
+            candidate
+            / STABLE_DIFFUSION_SCHEDULER_SUBFOLDER
+            / STABLE_DIFFUSION_SCHEDULER_CONFIG_NAME
+        )
 
         if text_encoder.is_file() and unet.is_file() and vae_decoder.is_file():
             metadata_path = candidate / "metadata.yaml"
@@ -129,6 +137,7 @@ def resolve_stable_diffusion_assets(models_dir: str | Path | None = None) -> dic
                 "model_root_windows": _to_windows_path(candidate),
                 "metadata_path": metadata_path,
                 "metadata_path_windows": _to_windows_path(metadata_path),
+                "scheduler_config_path": scheduler_config if scheduler_config.is_file() else None,
                 "text_encoder": text_encoder,
                 "text_encoder_windows": _to_windows_path(text_encoder),
                 "unet": unet,

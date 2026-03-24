@@ -1,8 +1,19 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import { engineEvents, loadModel, clearLoadedModels, getInstalledModels, runFlow } from "$lib/engine";
+    import {
+        engineEvents,
+        loadModel,
+        clearLoadedModels,
+        getInstalledModels,
+        runFlow,
+        type TextToImageInput,
+    } from "$lib/engine";
 
     const TASKS: string[] = ["text-to-image", "text-generation", "image-to-image"];
+    const DEFAULT_NUM_STEPS = 20;
+    const DEFAULT_GUIDANCE_SCALE = 7.5;
+    const DEFAULT_SEED = 41;
+    const MAX_SEED = 2147483647;
 
     let selectedModel = "";
     let selectedTask  = "";
@@ -87,13 +98,41 @@
         flowNodes = flowNodes.map((n) => ({ ...n, loaded: false }));
     };
 
-    let flowInput: string = "";
+    let flowInput = "";
+    let promptInput = "";
+    let numSteps = DEFAULT_NUM_STEPS;
+    let guidanceScale = DEFAULT_GUIDANCE_SCALE;
+    let seed = DEFAULT_SEED;
+
+    $: firstInputTask = flowNodes[0]?.task ?? selectedTask;
+    $: isTextToImageFlow = firstInputTask === "text-to-image";
+    $: canRunFlow =
+        flowNodes.length > 0 &&
+        flowNodes.every((n) => n.loaded) &&
+        (!isTextToImageFlow || promptInput.trim().length > 0);
+
+    function randomizeSeed() {
+        seed = Math.floor(Math.random() * (MAX_SEED + 1));
+    };
+
+    function buildFlowInput(): string | TextToImageInput {
+        if (!isTextToImageFlow) {
+            return flowInput;
+        }
+
+        return {
+            prompt: promptInput.trim(),
+            num_steps: numSteps,
+            guidance_scale: guidanceScale,
+            seed,
+        };
+    };
 
     function executeFlow() {
-        if (flowNodes.length === 0 || !flowNodes.every((n) => n.loaded)) return;
+        if (!canRunFlow) return;
         isRunning = true;
         const flow = flowNodes.map((n) => ({ model_id: n.repo_id, task: n.task }));
-        runFlow(flow, flowInput);
+        runFlow(flow, buildFlowInput());
     };
 
     // Format output for display
@@ -148,7 +187,7 @@
         <button
             class="run-btn"
             on:click={executeFlow}
-            disabled={flowNodes.length === 0 || isRunning || !flowNodes.every((n) => n.loaded)}
+            disabled={!canRunFlow || isRunning}
         >
             {#if isRunning}
                 <span class="spinner">Running…</span>
@@ -179,8 +218,74 @@
 
     <div class="io-panel">
         <div class="io-input">
-            <label for="id">Input</label>
-            <input bind:value={flowInput} placeholder="Enter prompt or data…" />
+            {#if isTextToImageFlow}
+                <label for="prompt-input">Prompt</label>
+                <textarea
+                    id="prompt-input"
+                    bind:value={promptInput}
+                    rows="4"
+                    placeholder="Describe the image you want to generate…"
+                />
+
+                <div class="parameter-grid">
+                    <div class="parameter-field">
+                        <div class="parameter-label-row">
+                            <label for="steps-input">Number of steps</label>
+                            <span class="parameter-value">{numSteps}</span>
+                        </div>
+                        <input
+                            id="steps-input"
+                            type="range"
+                            bind:value={numSteps}
+                            min="1"
+                            max="50"
+                            step="1"
+                        />
+                    </div>
+
+                    <div class="parameter-field">
+                        <div class="parameter-label-row">
+                            <label for="guidance-input">Guidance scale</label>
+                            <span class="parameter-value">{guidanceScale.toFixed(1)}</span>
+                        </div>
+                        <input
+                            id="guidance-input"
+                            type="range"
+                            bind:value={guidanceScale}
+                            min="0"
+                            max="20"
+                            step="0.5"
+                        />
+                    </div>
+
+                    <div class="parameter-field parameter-field-wide">
+                        <div class="parameter-label-row">
+                            <label for="seed-input">Seed</label>
+                            <span class="parameter-value">{seed}</span>
+                        </div>
+                        <div class="seed-row">
+                            <input
+                                id="seed-input"
+                                type="number"
+                                bind:value={seed}
+                                min="0"
+                                max={MAX_SEED}
+                                step="1"
+                            />
+                            <button type="button" class="seed-randomize" on:click={randomizeSeed}>
+                                Randomize
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            {:else}
+                <label for="flow-input">Input</label>
+                <input
+                    id="flow-input"
+                    bind:value={flowInput}
+                    placeholder="Enter prompt or data…"
+                />
+            {/if}
         </div>
 
         <div class="io-output" class:has-content={!!flowOutput || !!lastError}>

@@ -40,9 +40,14 @@ def _prepare_flow_input(flow_steps, raw_input):
         return raw_input
 
     if raw_input is None:
-        raise ValueError("Text-to-image flow requires a prompt.")
+        raise ValueError(
+            "Text-to-image flow requires an input object with at least a non-empty 'prompt' field."
+        )
 
-    return {"prompt": str(raw_input)}
+    raise TypeError(
+        "Text-to-image flow input must be an object with 'prompt', 'num_steps', "
+        "'guidance_scale', and 'seed' fields."
+    )
 
 
 def _image_to_data_url(image_output) -> str:

@@ -70,11 +70,59 @@
 
 /* ── IO Panel: side by side ── */
 .io-panel {
-    @apply flex flex-row gap-4;
+    @apply flex flex-col gap-4 lg:flex-row;
 }
 
 .io-input {
     @apply flex flex-col gap-2 flex-1;
+}
+
+.io-input label,
+.parameter-label-row {
+    @apply text-sm font-medium text-gray-700;
+}
+
+.io-input textarea,
+.io-input input[type="text"],
+.io-input input[type="number"] {
+    @apply rounded-md border border-gray-300 px-3 py-2 text-sm bg-white;
+}
+
+.io-input textarea {
+    @apply min-h-32 resize-y;
+}
+
+.parameter-grid {
+    @apply grid gap-4 md:grid-cols-2;
+}
+
+.parameter-field {
+    @apply flex flex-col gap-2;
+}
+
+.parameter-field-wide {
+    @apply md:col-span-2;
+}
+
+.parameter-label-row {
+    @apply flex items-center justify-between gap-3;
+}
+
+.parameter-value {
+    @apply rounded-md bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-600;
+}
+
+.parameter-field input[type="range"] {
+    @apply w-full accent-blue-600;
+}
+
+.seed-row {
+    @apply flex flex-col gap-2 sm:flex-row;
+}
+
+.seed-randomize {
+    @apply rounded-md px-4 py-2 text-sm font-medium bg-gray-100
+        hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed;
 }
 
 .main-nav-container {

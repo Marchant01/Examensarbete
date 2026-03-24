@@ -1,16 +1,24 @@
+import math
+import json
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import onnxruntime as ort
 from diffusers import DDIMScheduler
+from huggingface_hub import hf_hub_download
 from qai_hub_models.models._shared.stable_diffusion.app import StableDiffusionApp
 from qai_hub_models.utils.onnx.torch_wrapper import OnnxModelTorchWrapper
 from transformers import CLIPTokenizer, pipeline as hf_pipeline
 
 from model_loader import (
+    STABLE_DIFFUSION_DEFAULT_GUIDANCE_SCALE,
     QUALCOMM_REFERENCE_ONNXRUNTIME_QNN_VERSION,
     STABLE_DIFFUSION_DEFAULT_SEED,
     STABLE_DIFFUSION_DEFAULT_STEPS,
+    STABLE_DIFFUSION_SCHEDULER_CONFIG_NAME,
+    STABLE_DIFFUSION_SCHEDULER_SUBFOLDER,
     TASK_CONFIG,
     resolve_model_source,
 )
@@ -32,22 +40,124 @@ def _session_options() -> ort.SessionOptions:
     return session_options
 
 
-def _coerce_text_to_image_inputs(inputs: Any) -> tuple[str, int, int]:
-    if isinstance(inputs, str):
-        prompt = inputs
-        num_steps = STABLE_DIFFUSION_DEFAULT_STEPS
-        seed = STABLE_DIFFUSION_DEFAULT_SEED
-    elif isinstance(inputs, dict):
-        prompt = inputs.get("prompt") or inputs.get("text") or inputs.get("input")
-        num_steps = int(inputs.get("num_steps", STABLE_DIFFUSION_DEFAULT_STEPS))
-        seed = int(inputs.get("seed", STABLE_DIFFUSION_DEFAULT_SEED))
-    else:
-        raise TypeError("Text-to-image input must be a prompt string or an input object.")
+@dataclass(frozen=True)
+class TextToImageInputs:
+    prompt: str
+    num_steps: int
+    guidance_scale: float
+    seed: int
 
+
+def _read_scheduler_config(config_path: Path) -> dict:
+    try:
+        with config_path.open(encoding="utf-8") as fh:
+            return json.load(fh)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Failed to read Stable Diffusion scheduler config at '{config_path}'."
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Stable Diffusion scheduler config at '{config_path}' is not valid JSON."
+        ) from exc
+
+
+def _load_scheduler_config(model_spec: dict) -> tuple[dict, str]:
+    scheduler_config_path = model_spec.get("scheduler_config_path")
+    if isinstance(scheduler_config_path, Path) and scheduler_config_path.is_file():
+        return _read_scheduler_config(scheduler_config_path), str(scheduler_config_path)
+
+    try:
+        config_path = Path(
+            hf_hub_download(
+                repo_id=model_spec["hf_repo"],
+                filename=f"{STABLE_DIFFUSION_SCHEDULER_SUBFOLDER}/{STABLE_DIFFUSION_SCHEDULER_CONFIG_NAME}",
+            )
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to fetch Stable Diffusion scheduler config from Hugging Face repo "
+            f"'{model_spec['hf_repo']}'."
+        ) from exc
+
+    return _read_scheduler_config(config_path), str(config_path)
+
+
+def _make_stable_diffusion_scheduler(model_spec: dict):
+    config, config_source = _load_scheduler_config(model_spec)
+    config = dict(config)
+    config.pop("_class_name", None)
+
+    try:
+        scheduler = DDIMScheduler.from_config(config)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to instantiate Stable Diffusion scheduler 'DDIMScheduler' from config '{config_source}'."
+        ) from exc
+
+    print("Stable Diffusion scheduler:", "DDIMScheduler", f"(config_source={config_source})")
+    return scheduler
+
+
+def _coerce_int_field(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"Text-to-image field '{field_name}' must be an integer.")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"Text-to-image field '{field_name}' must be an integer.")
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Text-to-image field '{field_name}' must be an integer.") from exc
+
+
+def _coerce_non_negative_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"Text-to-image field '{field_name}' must be a number.")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Text-to-image field '{field_name}' must be a number.") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise ValueError(
+            f"Text-to-image field '{field_name}' must be a finite number greater than or equal to 0."
+        )
+    return parsed
+
+
+def _coerce_text_to_image_inputs(inputs: Any) -> TextToImageInputs:
+    if not isinstance(inputs, dict):
+        raise TypeError(
+            "Text-to-image input must be an object with 'prompt', 'num_steps', "
+            "'guidance_scale', and 'seed' fields."
+        )
+
+    prompt = inputs.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Text-to-image input requires a non-empty prompt.")
 
-    return prompt.strip(), num_steps, seed
+    num_steps = _coerce_int_field(
+        inputs.get("num_steps", STABLE_DIFFUSION_DEFAULT_STEPS),
+        "num_steps",
+    )
+    if num_steps <= 0:
+        raise ValueError("Text-to-image field 'num_steps' must be greater than 0.")
+
+    guidance_scale = _coerce_non_negative_float(
+        inputs.get("guidance_scale", STABLE_DIFFUSION_DEFAULT_GUIDANCE_SCALE),
+        "guidance_scale",
+    )
+    seed = _coerce_int_field(inputs.get("seed", STABLE_DIFFUSION_DEFAULT_SEED), "seed")
+
+    return TextToImageInputs(
+        prompt=prompt.strip(),
+        num_steps=num_steps,
+        guidance_scale=guidance_scale,
+        seed=seed,
+    )
 
 
 def _read_exported_onnxruntime_version(model_spec: dict) -> str | None:
@@ -115,13 +225,18 @@ class StableDiffusionRunner:
             OnnxModelTorchWrapper.OnNPU(str(model_spec["vae_decoder"])),
             OnnxModelTorchWrapper.OnNPU(str(model_spec["unet"])),
             CLIPTokenizer.from_pretrained(model_spec["hf_repo"], subfolder="tokenizer"),
-            DDIMScheduler.from_pretrained(model_spec["hf_repo"], subfolder="scheduler"),
+            _make_stable_diffusion_scheduler(model_spec),
             channel_last_latent=True,
         )
 
     def run(self, inputs: Any) -> Any:
-        prompt, num_steps, seed = _coerce_text_to_image_inputs(inputs)
-        return self._app.generate_image(prompt, num_steps, seed)
+        text_to_image_inputs = _coerce_text_to_image_inputs(inputs)
+        return self._app.generate_image(
+            prompt=text_to_image_inputs.prompt,
+            num_steps=text_to_image_inputs.num_steps,
+            seed=text_to_image_inputs.seed,
+            guidance_scale=text_to_image_inputs.guidance_scale,
+        )
 
 
 class ModelRunner:
