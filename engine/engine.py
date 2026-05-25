@@ -11,13 +11,8 @@ import numpy as np
 from PIL import Image
 from qai_hub_models.utils.display import to_uint8
 
-from flow_manager import model_registry, run_flow
-from model_loader import (
-    list_available_models,
-    list_installed_models,
-    install_model,
-    list_model_filters,
-)
+from flow_manager import model_registry, run_model
+from model_loader import list_supported_models
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MODELS_DIR = ROOT_DIR / "models"
@@ -26,28 +21,6 @@ DEFAULT_MODELS_DIR = ROOT_DIR / "models"
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
-
-
-def _prepare_flow_input(flow_steps, raw_input):
-    if not flow_steps:
-        return raw_input
-
-    first_task = flow_steps[0].get("task")
-    if first_task != "text-to-image":
-        return raw_input
-
-    if isinstance(raw_input, dict):
-        return raw_input
-
-    if raw_input is None:
-        raise ValueError(
-            "Text-to-image flow requires an input object with at least a non-empty 'prompt' field."
-        )
-
-    raise TypeError(
-        "Text-to-image flow input must be an object with 'prompt', 'num_steps', "
-        "'guidance_scale', and 'seed' fields."
-    )
 
 
 def _image_to_data_url(image_output) -> str:
@@ -96,16 +69,10 @@ async def main():
             cmd = req.get("cmd")
             args = req.get("args", {})
 
-            if cmd == "list_available_models":
-                task = args["task"]
-                limit = int(args.get("limit", 20))
+            if cmd == "list_supported_models":
                 try:
-                    models = await list_available_models(task, limit)
-                    send({
-                        "id": req_id,
-                        "type": "done",
-                        "data": {"models": models},
-                    })
+                    data = list_supported_models(str(models_dir))
+                    send({"id": req_id, "type": "done", "data": data})
                 except Exception as e:
                     send({
                         "id": req_id,
@@ -115,45 +82,34 @@ async def main():
                             "trace": traceback.format_exc(),
                         },
                     })
-                continue
-
-            if cmd == "list_installed_models":
-                data = list_installed_models(str(models_dir))
-                send({"id": req_id, "type": "done", "data": data})
-                continue
-
-            if cmd == "install_model":
-                task = args["task"]
-                repo_id = args["repo_id"]
-                try:
-                    model = await install_model(repo_id, task, str(models_dir))
-                    send({
-                        "id": req_id,
-                        "type": "done",
-                        "data": {"model": model},
-                    })
-                except Exception as e:
-                    send({
-                        "id": req_id,
-                        "type": "error",
-                        "data": {
-                            "message": str(e),
-                            "trace": traceback.format_exc(),
-                        },
-                    })
-                continue
-
-            if cmd == "list_model_filters":
-                filters = list_model_filters()
-                send({"id": req_id, "type": "done", "data": {"filters": filters}})
                 continue
 
             if cmd == "load_model":
-                repo_id = args["repo_id"]
-                task = args["task"]
+                model_id = args.get("model_id") or args.get("repo_id")
+                task = args.get("task")
                 try:
-                    await asyncio.to_thread(model_registry.load, repo_id, task)
-                    send({"id": req_id, "type": "done", "data": {"loaded": repo_id}})
+                    runner = await asyncio.to_thread(model_registry.load, model_id, task)
+                    send({"id": req_id, "type": "done", "data": {"loaded": runner.model_id}})
+                except Exception as e:
+                    send({
+                        "id": req_id,
+                        "type": "error",
+                        "data": {
+                            "message": str(e),
+                            "trace": traceback.format_exc(),
+                        },
+                    })
+                continue
+
+            if cmd == "run_model":
+                try:
+                    model_id = args["model_id"]
+                    result = await asyncio.to_thread(run_model, model_id, args.get("input"))
+                    send({
+                        "id": req_id,
+                        "type": "done",
+                        "data": {"outputs": _serialize_result(result)},
+                    })
                 except Exception as e:
                     send({
                         "id": req_id,
@@ -169,27 +125,6 @@ async def main():
                 try:
                     model_registry.clear_loaded_models()
                     send({"id": req_id, "type": "done", "data": "cleared"})
-                except Exception as e:
-                    send({
-                        "id": req_id,
-                        "type": "error",
-                        "data": {
-                            "message": str(e),
-                            "trace": traceback.format_exc(),
-                        },
-                    })
-                continue
-
-            if cmd == "run_flow":
-                try:
-                    flow = args["flow"]
-                    initial_input = _prepare_flow_input(flow, args.get("input"))
-                    result = await asyncio.to_thread(run_flow, flow, initial_input)
-                    send({
-                        "id": req_id,
-                        "type": "done",
-                        "data": {"outputs": _serialize_result(result)},
-                    })
                 except Exception as e:
                     send({
                         "id": req_id,

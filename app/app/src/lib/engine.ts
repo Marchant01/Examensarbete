@@ -6,11 +6,30 @@ export const engineEvents = writable<any[]>([]);
 export const engineRaw = writable<string[]>([]);
 export const engineErr = writable<string[]>([]);
 
+export const STABLE_DIFFUSION_MODEL_ID = "stable-diffusion";
+export const CONTROLNET_CANNY_MODEL_ID = "controlnet-canny";
+
+export type SupportedModel = {
+    id: string;
+    label: string;
+    task: string;
+    runner: string;
+    installed: boolean;
+    path: string | null;
+    missing_components: string[];
+};
+
 export type TextToImageInput = {
     prompt: string;
     num_steps: number;
     guidance_scale: number;
     seed: number;
+};
+
+export type ControlNetCannyInput = TextToImageInput & {
+    image_data_url: string;
+    canny_low_threshold: number;
+    canny_high_threshold: number;
 };
 
 let startPromise: Promise<void> | null = null;
@@ -46,7 +65,7 @@ async function ensureListeners() {
     return listenersPromise;
 }
 
-// Starts the python engine and reads from the IO stream
+// Starts the python engine and reads from the IO stream.
 export async function startEngine() {
     if (startPromise) return startPromise;
 
@@ -77,65 +96,32 @@ export async function stopEngine() {
     listenersPromise = null;
 };
 
-export async function sendJson(obj: unknown) {
+async function sendJson(obj: unknown) {
     await startEngine();
     await invoke('send_engine_json', { payload: obj });
 };
 
-export async function getModels(task: string, limit: number = 10) {
-    await sendJson({
-        id: crypto.randomUUID(),
-        cmd: "list_available_models",
-        args: {"task": task, "limit": limit}
-    });
+async function sendCommand(cmd: string, args: Record<string, unknown> = {}) {
+    const id = crypto.randomUUID();
+    await sendJson({ id, cmd, args });
+    return id;
 };
 
-export async function getInstalledModels() {
-    await sendJson({
-        id: crypto.randomUUID(),
-        cmd: "list_installed_models",
-        args: {}
-    });
+export async function getSupportedModels() {
+    return sendCommand("list_supported_models");
 };
 
-// Could be used for future features where more 
-// model categories are added and make it dynamic in the frontend
-export async function getFilters() {
-    await sendJson({
-        id: crypto.randomUUID(),
-        cmd: "list_model_filters",
-        args: {}
-    });
-};
-
-export async function installModel(repoID: string, task: string) {
-    await sendJson({
-        id: crypto.randomUUID(),
-        cmd: "install_model",
-        args: {"repo_id": repoID, "task": task}
-    });
-};
-
-export async function loadModel(repoID: string, task: string) {
-    await sendJson({
-        id: crypto.randomUUID(),
-        cmd: "load_model",
-        args: {"repo_id": repoID, "task": task}
-    });
+export async function loadModel(modelID: string) {
+    return sendCommand("load_model", { model_id: modelID });
 };
 
 export async function clearLoadedModels() {
-    await sendJson({
-        id: crypto.randomUUID(),
-        cmd: "clear_loaded_models",
-        args: {}
-    });
+    return sendCommand("clear_loaded_models");
 };
 
-export async function runFlow(flow: any[], input: any) {
-    await sendJson({
-        id: crypto.randomUUID(),
-        cmd: "run_flow",
-        args: {"flow": flow, "input": input}
-    });
+export async function runModel(
+    modelID: string,
+    input: TextToImageInput | ControlNetCannyInput,
+) {
+    return sendCommand("run_model", { model_id: modelID, input });
 };

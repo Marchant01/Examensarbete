@@ -1,51 +1,52 @@
-import math
+import base64
 import json
+import math
 import re
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import onnxruntime as ort
+import torch
 from diffusers import DDIMScheduler
 from huggingface_hub import hf_hub_download
-from qai_hub_models.models._shared.stable_diffusion.app import StableDiffusionApp
+from PIL import Image
+from qai_hub_models.models._shared.stable_diffusion.app import (
+    OUT_H,
+    OUT_W,
+    StableDiffusionApp,
+)
 from qai_hub_models.utils.onnx.torch_wrapper import OnnxModelTorchWrapper
-from transformers import CLIPTokenizer, pipeline as hf_pipeline
+from transformers import CLIPTokenizer
 
 from model_loader import (
-    STABLE_DIFFUSION_DEFAULT_GUIDANCE_SCALE,
+    CONTROLNET_CANNY_DEFAULT_HIGH_THRESHOLD,
+    CONTROLNET_CANNY_DEFAULT_LOW_THRESHOLD,
     QUALCOMM_REFERENCE_ONNXRUNTIME_QNN_VERSION,
+    STABLE_DIFFUSION_DEFAULT_GUIDANCE_SCALE,
     STABLE_DIFFUSION_DEFAULT_SEED,
     STABLE_DIFFUSION_DEFAULT_STEPS,
     STABLE_DIFFUSION_SCHEDULER_CONFIG_NAME,
     STABLE_DIFFUSION_SCHEDULER_SUBFOLDER,
-    TASK_CONFIG,
+    normalize_model_id,
     resolve_model_source,
 )
 
-print(ort.__version__)
-
-QNN_PROVIDER = "QNNExecutionProvider"
-QNN_PROVIDER_OPTIONS = {
-    "backend_path": "QnnHtp.dll",
-    "htp_performance_mode": "high_performance",
-    "enable_htp_fp16_precision": "1",
-}
-
-def _session_options() -> ort.SessionOptions:
-    session_options = ort.SessionOptions()
-    session_options.enable_profiling = True
-    session_options.add_session_config_entry("ep.context_embed_mode", "1")
-    session_options.add_session_config_entry("ep.context_enable", "1")
-    return session_options
-
 
 @dataclass(frozen=True)
-class TextToImageInputs:
+class GenerationInputs:
     prompt: str
     num_steps: int
     guidance_scale: float
     seed: int
+
+
+@dataclass(frozen=True)
+class ControlNetCannyInputs(GenerationInputs):
+    image: Image.Image
+    canny_low_threshold: int
+    canny_high_threshold: int
 
 
 def _read_scheduler_config(config_path: Path) -> dict:
@@ -101,62 +102,116 @@ def _make_stable_diffusion_scheduler(model_spec: dict):
 
 def _coerce_int_field(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
-        raise ValueError(f"Text-to-image field '{field_name}' must be an integer.")
+        raise ValueError(f"Field '{field_name}' must be an integer.")
     if isinstance(value, int):
         return value
     if isinstance(value, float):
         if not value.is_integer():
-            raise ValueError(f"Text-to-image field '{field_name}' must be an integer.")
+            raise ValueError(f"Field '{field_name}' must be an integer.")
         return int(value)
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Text-to-image field '{field_name}' must be an integer.") from exc
+        raise ValueError(f"Field '{field_name}' must be an integer.") from exc
 
 
-def _coerce_non_negative_float(value: Any, field_name: str) -> float:
+def _coerce_float_field(value: Any, field_name: str) -> float:
     if isinstance(value, bool):
-        raise ValueError(f"Text-to-image field '{field_name}' must be a number.")
+        raise ValueError(f"Field '{field_name}' must be a number.")
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Text-to-image field '{field_name}' must be a number.") from exc
+        raise ValueError(f"Field '{field_name}' must be a number.") from exc
     if not math.isfinite(parsed) or parsed < 0:
         raise ValueError(
-            f"Text-to-image field '{field_name}' must be a finite number greater than or equal to 0."
+            f"Field '{field_name}' must be a finite number greater than or equal to 0."
         )
     return parsed
 
 
-def _coerce_text_to_image_inputs(inputs: Any) -> TextToImageInputs:
+def _coerce_generation_inputs(inputs: Any) -> GenerationInputs:
     if not isinstance(inputs, dict):
         raise TypeError(
-            "Text-to-image input must be an object with 'prompt', 'num_steps', "
+            "Model input must be an object with 'prompt', 'num_steps', "
             "'guidance_scale', and 'seed' fields."
         )
 
     prompt = inputs.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
-        raise ValueError("Text-to-image input requires a non-empty prompt.")
+        raise ValueError("Model input requires a non-empty prompt.")
 
     num_steps = _coerce_int_field(
         inputs.get("num_steps", STABLE_DIFFUSION_DEFAULT_STEPS),
         "num_steps",
     )
     if num_steps <= 0:
-        raise ValueError("Text-to-image field 'num_steps' must be greater than 0.")
+        raise ValueError("Field 'num_steps' must be greater than 0.")
 
-    guidance_scale = _coerce_non_negative_float(
+    guidance_scale = _coerce_float_field(
         inputs.get("guidance_scale", STABLE_DIFFUSION_DEFAULT_GUIDANCE_SCALE),
         "guidance_scale",
     )
     seed = _coerce_int_field(inputs.get("seed", STABLE_DIFFUSION_DEFAULT_SEED), "seed")
+    if seed < 0:
+        raise ValueError("Field 'seed' must be greater than or equal to 0.")
 
-    return TextToImageInputs(
+    return GenerationInputs(
         prompt=prompt.strip(),
         num_steps=num_steps,
         guidance_scale=guidance_scale,
         seed=seed,
+    )
+
+
+def _decode_image_data_url(image_data_url: Any) -> Image.Image:
+    if not isinstance(image_data_url, str) or not image_data_url.strip():
+        raise ValueError("ControlNet-Canny requires a reference image data URL.")
+
+    raw = image_data_url.strip()
+    if "," in raw and raw.startswith("data:image"):
+        raw = raw.split(",", 1)[1]
+
+    try:
+        image_bytes = base64.b64decode(raw, validate=True)
+        return Image.open(BytesIO(image_bytes)).convert("RGB")
+    except Exception as exc:
+        raise ValueError("ControlNet-Canny reference image could not be decoded.") from exc
+
+
+def _coerce_threshold(value: Any, field_name: str, default: int) -> int:
+    parsed = _coerce_int_field(value if value is not None else default, field_name)
+    if parsed < 0 or parsed > 255:
+        raise ValueError(f"Field '{field_name}' must be between 0 and 255.")
+    return parsed
+
+
+def _coerce_controlnet_canny_inputs(inputs: Any) -> ControlNetCannyInputs:
+    generation_inputs = _coerce_generation_inputs(inputs)
+    assert isinstance(inputs, dict)
+
+    low = _coerce_threshold(
+        inputs.get("canny_low_threshold"),
+        "canny_low_threshold",
+        CONTROLNET_CANNY_DEFAULT_LOW_THRESHOLD,
+    )
+    high = _coerce_threshold(
+        inputs.get("canny_high_threshold"),
+        "canny_high_threshold",
+        CONTROLNET_CANNY_DEFAULT_HIGH_THRESHOLD,
+    )
+    if low > high:
+        raise ValueError(
+            "Field 'canny_low_threshold' must be less than or equal to 'canny_high_threshold'."
+        )
+
+    return ControlNetCannyInputs(
+        prompt=generation_inputs.prompt,
+        num_steps=generation_inputs.num_steps,
+        guidance_scale=generation_inputs.guidance_scale,
+        seed=generation_inputs.seed,
+        image=_decode_image_data_url(inputs.get("image_data_url")),
+        canny_low_threshold=low,
+        canny_high_threshold=high,
     )
 
 
@@ -183,7 +238,7 @@ def _version_series(version: str | None) -> str | None:
     return ".".join(parts[:2]) if len(parts) >= 2 else version
 
 
-def _validate_stable_diffusion_runtime(model_spec: dict) -> None:
+def _validate_qualcomm_runtime(model_spec: dict) -> None:
     installed_ort = ort.__version__
     exported_ort = _read_exported_onnxruntime_version(model_spec)
     installed_series = _version_series(installed_ort)
@@ -194,7 +249,7 @@ def _validate_stable_diffusion_runtime(model_spec: dict) -> None:
         return
 
     message = (
-        "Stable Diffusion Qualcomm runtime mismatch. "
+        "Qualcomm model runtime mismatch. "
         f"Installed onnxruntime is {installed_ort}."
     )
 
@@ -216,10 +271,73 @@ def _validate_stable_diffusion_runtime(model_spec: dict) -> None:
     raise RuntimeError(message)
 
 
+def _nchw_to_nhwc(tensor: torch.Tensor) -> torch.Tensor:
+    return torch.permute(torch.as_tensor(tensor), (0, 2, 3, 1)).contiguous()
+
+
+def _nhwc_to_nchw(tensor: torch.Tensor) -> torch.Tensor:
+    return torch.permute(torch.as_tensor(tensor), (0, 3, 1, 2)).contiguous()
+
+
+class ControlNetOnNPU:
+    def __init__(self, model_path: Path):
+        self._model = OnnxModelTorchWrapper.OnNPU(str(model_path))
+
+    def __call__(
+        self,
+        latent: torch.Tensor,
+        timestep: torch.Tensor,
+        text_emb: torch.Tensor,
+        image_cond: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
+        outputs = self._model(
+            _nchw_to_nhwc(latent),
+            timestep,
+            text_emb,
+            _nchw_to_nhwc(image_cond),
+        )
+        if not isinstance(outputs, tuple):
+            raise TypeError("ControlNet-Canny model returned an unexpected single output.")
+        return tuple(_nhwc_to_nchw(output) for output in outputs)
+
+
+class ControlUnetOnNPU:
+    def __init__(self, model_path: Path):
+        self._model = OnnxModelTorchWrapper.OnNPU(str(model_path))
+
+    def __call__(
+        self,
+        latent: torch.Tensor,
+        timestep: torch.Tensor,
+        text_emb: torch.Tensor,
+        *controlnet_outputs: torch.Tensor,
+    ) -> torch.Tensor:
+        output = self._model(
+            _nchw_to_nhwc(latent),
+            timestep,
+            text_emb,
+            *[_nchw_to_nhwc(output) for output in controlnet_outputs],
+        )
+        if not isinstance(output, torch.Tensor):
+            raise TypeError("ControlNet-Canny UNet returned an unexpected output tuple.")
+        return _nhwc_to_nchw(output)
+
+
+class VaeDecoderOnNPU:
+    def __init__(self, model_path: Path):
+        self._model = OnnxModelTorchWrapper.OnNPU(str(model_path))
+
+    def __call__(self, latent: torch.Tensor) -> torch.Tensor:
+        output = self._model(_nchw_to_nhwc(latent))
+        if not isinstance(output, torch.Tensor):
+            raise TypeError("VAE decoder returned an unexpected output tuple.")
+        return output
+
+
 class StableDiffusionRunner:
     def __init__(self, model_spec: dict):
         self.model_spec = model_spec
-        _validate_stable_diffusion_runtime(model_spec)
+        _validate_qualcomm_runtime(model_spec)
         self._app = StableDiffusionApp(
             OnnxModelTorchWrapper.OnNPU(str(model_spec["text_encoder"])),
             OnnxModelTorchWrapper.OnNPU(str(model_spec["vae_decoder"])),
@@ -230,105 +348,85 @@ class StableDiffusionRunner:
         )
 
     def run(self, inputs: Any) -> Any:
-        text_to_image_inputs = _coerce_text_to_image_inputs(inputs)
+        model_inputs = _coerce_generation_inputs(inputs)
         return self._app.generate_image(
-            prompt=text_to_image_inputs.prompt,
-            num_steps=text_to_image_inputs.num_steps,
-            seed=text_to_image_inputs.seed,
-            guidance_scale=text_to_image_inputs.guidance_scale,
+            prompt=model_inputs.prompt,
+            num_steps=model_inputs.num_steps,
+            seed=model_inputs.seed,
+            guidance_scale=model_inputs.guidance_scale,
+        )
+
+
+class ControlNetCannyRunner:
+    def __init__(self, model_spec: dict):
+        from qai_hub_models.models.controlnet_canny import Model as ControlNetCannyModel
+
+        self.model_spec = model_spec
+        _validate_qualcomm_runtime(model_spec)
+        self._app = StableDiffusionApp(
+            text_encoder=OnnxModelTorchWrapper.OnNPU(str(model_spec["text_encoder"])),
+            vae_decoder=VaeDecoderOnNPU(model_spec["vae_decoder"]),
+            unet=ControlUnetOnNPU(model_spec["unet"]),
+            tokenizer=ControlNetCannyModel.make_tokenizer(),
+            scheduler=ControlNetCannyModel.make_scheduler("DEFAULT"),
+            channel_last_latent=False,
+            controlnet=ControlNetOnNPU(model_spec["controlnet"]),
+        )
+
+    def run(self, inputs: Any) -> Any:
+        from qai_hub_models.models._shared.stable_diffusion.utils import make_canny
+
+        model_inputs = _coerce_controlnet_canny_inputs(inputs)
+        cond_image = make_canny(
+            model_inputs.image,
+            OUT_H,
+            OUT_W,
+            model_inputs.canny_low_threshold,
+            model_inputs.canny_high_threshold,
+        )
+        return self._app.generate_image(
+            prompt=model_inputs.prompt,
+            num_steps=model_inputs.num_steps,
+            seed=model_inputs.seed,
+            guidance_scale=model_inputs.guidance_scale,
+            cond_image=cond_image,
         )
 
 
 class ModelRunner:
-    """
-    Wrap an ORT-backed pipeline so .run(input) accepts plain Python values
-    and returns plain Python values suitable for chaining.
-    """
+    def __init__(self, model_id: str):
+        self.model_id = normalize_model_id(model_id)
+        self._runner = self._load(self.model_id)
 
-    def __init__(self, repo_id: str, task: str):
-        self.repo_id = repo_id
-        self.task = task
-        self._pipe = self._load(repo_id, task)
-
-    def _load(self, repo_id: str, task: str):
-        if task == "text-to-image":
-            model_spec = resolve_model_source(repo_id, task)
+    def _load(self, model_id: str):
+        model_spec = resolve_model_source(model_id)
+        runner = model_spec["runner"]
+        if runner == "stable-diffusion":
             return StableDiffusionRunner(model_spec)
-
-        if task == "image-to-image":
-            raise NotImplementedError("image-to-image is not wired to the Qualcomm demo setup.")
-
-        cfg = TASK_CONFIG.get(task)
-        if cfg is None:
-            raise ValueError(f"Unsupported task '{task}'.")
-
-        ort_class = cfg["ort_class"]
-        if ort_class is None:
-            raise ImportError(f"Missing runtime support for task '{task}'.")
-        processor_fn = cfg["processor_fn"]
-        pipeline_task = cfg["pipeline_task"]
-
-        model = ort_class.from_pretrained(
-            repo_id,
-            session_options=_session_options(),
-            providers=[QNN_PROVIDER],
-            provider_options=[QNN_PROVIDER_OPTIONS],
-        )
-
-        processor = processor_fn(repo_id)
-        if task == "image-classification":
-            return hf_pipeline(pipeline_task, model=model, feature_extractor=processor)
-
-        return hf_pipeline(pipeline_task, model=model, tokenizer=processor)
+        if runner == "controlnet-canny":
+            return ControlNetCannyRunner(model_spec)
+        raise ValueError(f"Unsupported model runner '{runner}'.")
 
     def run(self, inputs: Any) -> Any:
-        if self.task == "text-to-image":
-            return self._pipe.run(inputs)
-
-        output = self._pipe(inputs)
-
-        if self.task in ("text-generation", "text-to-text"):
-            if isinstance(output, list) and output:
-                first = output[0]
-                if "generated_text" in first:
-                    return first["generated_text"]
-                if "translation_text" in first:
-                    return first["translation_text"]
-                if "summary_text" in first:
-                    return first["summary_text"]
-
-        if self.task == "text-classification":
-            if isinstance(output, list) and output:
-                return output[0]["label"]
-
-        if self.task == "feature-extraction":
-            return output[0]
-
-        if self.task == "image-classification":
-            if isinstance(output, list) and output:
-                return output[0]["label"]
-
-        if self.task == "image-to-image" and hasattr(output, "images"):
-            return output.images[0]
-
-        return output
+        return self._runner.run(inputs)
 
 
 class ModelRegistry:
     """Keeps loaded ModelRunner instances in memory to avoid reloading."""
 
     def __init__(self):
-        self._runners: Dict[str, ModelRunner] = {}
+        self._runners: dict[str, ModelRunner] = {}
 
-    def load(self, model_id: str, task: str) -> ModelRunner:
-        if model_id not in self._runners:
-            self._runners[model_id] = ModelRunner(model_id, task)
-        return self._runners[model_id]
+    def load(self, model_id: str, _task: str | None = None) -> ModelRunner:
+        normalized = normalize_model_id(model_id)
+        if normalized not in self._runners:
+            self._runners[normalized] = ModelRunner(normalized)
+        return self._runners[normalized]
 
     def get(self, model_id: str) -> Optional[ModelRunner]:
-        return self._runners.get(model_id)
+        return self._runners.get(normalize_model_id(model_id))
 
-    def list_loaded(self) -> List[str]:
+    def list_loaded(self) -> list[str]:
         return list(self._runners.keys())
 
     def clear_loaded_models(self):
@@ -338,19 +436,10 @@ class ModelRegistry:
 model_registry = ModelRegistry()
 
 
-def run_flow(flow_steps: List[Dict], initial_input: Any) -> Any:
-    data = initial_input
-
-    for step in flow_steps:
-        model_id = step["model_id"]
-        runner = model_registry.get(model_id)
-
-        if runner is None:
-            raise ValueError(
-                f"Model '{model_id}' is not loaded. "
-                f"Call model_registry.load('{model_id}', task='...') first."
-            )
-
-        data = runner.run(data)
-
-    return data
+def run_model(model_id: str, inputs: Any) -> Any:
+    runner = model_registry.get(model_id)
+    if runner is None:
+        raise ValueError(
+            f"Model '{model_id}' is not loaded. Call load_model first."
+        )
+    return runner.run(inputs)

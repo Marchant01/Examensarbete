@@ -1,295 +1,505 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import { get } from "svelte/store";
     import {
-        engineEvents,
-        loadModel,
+        CONTROLNET_CANNY_MODEL_ID,
+        STABLE_DIFFUSION_MODEL_ID,
         clearLoadedModels,
-        getInstalledModels,
-        runFlow,
+        engineEvents,
+        getSupportedModels,
+        loadModel,
+        runModel,
+        type ControlNetCannyInput,
+        type SupportedModel,
         type TextToImageInput,
     } from "$lib/engine";
 
-    const TASKS: string[] = ["text-to-image", "text-generation", "image-to-image"];
     const DEFAULT_NUM_STEPS = 20;
     const DEFAULT_GUIDANCE_SCALE = 7.5;
     const DEFAULT_SEED = 41;
+    const DEFAULT_CANNY_LOW_THRESHOLD = 100;
+    const DEFAULT_CANNY_HIGH_THRESHOLD = 200;
     const MAX_SEED = 2147483647;
+    const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
-    let selectedModel = "";
-    let selectedTask  = "";
-
-    type InstalledModel = { repo_id: string; task: string };
-
-    $: installedModels = (() => {
-        const event = [...$engineEvents]
-            .reverse()
-            .find(
-                (ev) =>
-                    ev?.type === "done" &&
-                    ev?.data &&
-                    TASKS.some((t) => t in ev.data)
-            );
-        if (!event) return [] as InstalledModel[];
-
-        return Object.entries(event.data as Record<string, string[]>).flatMap(
-            ([task, ids]) => ids.map((repo_id) => ({ repo_id, task }))
-        );
-    })();
-
-    type FlowNode = { repo_id: string; task: string; loaded: boolean };
-    let flowNodes: FlowNode[] = [];
-
-    $: {
-        const loadedEvent = [...$engineEvents]
-            .reverse()
-            .find((ev) => ev?.type === "done" && ev?.data?.loaded);
-
-        if (loadedEvent) {
-            const loadedId = loadedEvent.data.loaded;
-            flowNodes = flowNodes.map((n) =>
-                n.repo_id === loadedId ? { ...n, loaded: true } : n
-            );
-        };
+    type EngineEvent = {
+        id?: string;
+        type?: "done" | "error" | string;
+        data?: any;
     };
 
-    $: {
-        const cleared = [...$engineEvents]
-            .reverse()
-            .find((ev) => ev?.type === "done" && ev?.data === "cleared");
-        if (cleared) {
-            flowNodes = flowNodes.map((n) => ({ ...n, loaded: false }));
-        };
-    };
-
-    // Derive flow output from the most recent run_flow response
     type FlowOutput = { outputs: any } | null;
-    $: flowOutput = (() => {
-        const ev = [...$engineEvents]
-            .reverse()
-            .find((ev) => ev?.type === "done" && ev?.data?.outputs !== undefined);
-        return ev ? ev.data : null as FlowOutput;
-    })();
 
-    // Derive any engine errors
-    $: lastError = [...$engineEvents]
-        .reverse()
-        .find((ev) => ev?.type === "error")?.data ?? null;
+    const FALLBACK_MODELS: SupportedModel[] = [
+        {
+            id: STABLE_DIFFUSION_MODEL_ID,
+            label: "Stable Diffusion",
+            task: "text-to-image",
+            runner: "stable-diffusion",
+            installed: true,
+            path: null,
+            missing_components: [],
+        },
+        {
+            id: CONTROLNET_CANNY_MODEL_ID,
+            label: "ControlNet-Canny",
+            task: "controlnet-canny",
+            runner: "controlnet-canny",
+            installed: true,
+            path: null,
+            missing_components: [],
+        },
+    ];
 
-    // Whether a flow is currently running (sent but no response yet)
-    let isRunning = false;
-    $: if (flowOutput || lastError) isRunning = false;
+    let supportedModels: SupportedModel[] = FALLBACK_MODELS;
+    let selectedModelId = STABLE_DIFFUSION_MODEL_ID;
+    let selectedModel = FALLBACK_MODELS[0];
+    let selectedModelLoaded = false;
+    let selectedModelInstalled = true;
+    let isControlNet = false;
+    let loadedModelIds: string[] = [];
 
-    function addModel() {
-        if (!selectedModel || !selectedTask) return;
-        if (flowNodes.some((n) => n.repo_id === selectedModel)) return;
-
-        loadModel(selectedModel, selectedTask);
-        flowNodes = [...flowNodes, { repo_id: selectedModel, task: selectedTask, loaded: false }];
-        selectedModel = "";
-        selectedTask  = "";
-    };
-
-    function removeNode(repo_id: string) {
-        flowNodes = flowNodes.filter((n) => n.repo_id !== repo_id);
-    };
-
-    function handleClear() {
-        clearLoadedModels();
-        flowNodes = flowNodes.map((n) => ({ ...n, loaded: false }));
-    };
-
-    let flowInput = "";
     let promptInput = "";
+    let referenceImageDataUrl = "";
+    let referenceImageName = "";
+    let referenceImageSize = 0;
+    let referenceImageType = "";
+    let referenceImageInput: HTMLInputElement | null = null;
     let numSteps = DEFAULT_NUM_STEPS;
     let guidanceScale = DEFAULT_GUIDANCE_SCALE;
     let seed = DEFAULT_SEED;
+    let cannyLowThreshold = DEFAULT_CANNY_LOW_THRESHOLD;
+    let cannyHighThreshold = DEFAULT_CANNY_HIGH_THRESHOLD;
 
-    $: firstInputTask = flowNodes[0]?.task ?? selectedTask;
-    $: isTextToImageFlow = firstInputTask === "text-to-image";
-    $: canRunFlow =
-        flowNodes.length > 0 &&
-        flowNodes.every((n) => n.loaded) &&
-        (!isTextToImageFlow || promptInput.trim().length > 0);
+    let isLoadingModel = false;
+    let isRunning = false;
+    let isRefreshingModels = false;
+    let flowOutput: FlowOutput = null;
+    let lastError: any = null;
+
+    function waitForEngineEvent(id: string): Promise<EngineEvent> {
+        const existingEvent = get(engineEvents).find((event) => event?.id === id);
+        if (existingEvent) return Promise.resolve(existingEvent);
+
+        return new Promise((resolve, reject) => {
+            let unsubscribe = () => {};
+            const timeout = setTimeout(() => {
+                unsubscribe();
+                reject(new Error("Timed out waiting for the engine response."));
+            }, REQUEST_TIMEOUT_MS);
+
+            unsubscribe = engineEvents.subscribe((events) => {
+                const event = events.find((item) => item?.id === id);
+                if (!event) return;
+
+                clearTimeout(timeout);
+                unsubscribe();
+                resolve(event);
+            });
+        });
+    }
+
+    function getSelectedModel(): SupportedModel {
+        return (
+            supportedModels.find((model) => model.id === selectedModelId) ||
+            FALLBACK_MODELS[0]
+        );
+    }
+
+    function syncSelectedModel() {
+        selectedModel = getSelectedModel();
+        selectedModelLoaded = modelIsLoaded(selectedModelId);
+        selectedModelInstalled = selectedModel.installed !== false;
+        isControlNet = selectedModelId === CONTROLNET_CANNY_MODEL_ID;
+    }
+
+    function modelIsLoaded(modelId: string): boolean {
+        for (const loadedId of loadedModelIds) {
+            if (loadedId === modelId) return true;
+        }
+        return false;
+    }
+
+    function normalizeError(error: unknown) {
+        return { message: error instanceof Error ? error.message : String(error) };
+    }
+
+    function getValidationError(): string | null {
+        if (!selectedModelInstalled) {
+            return `${selectedModel.label} is missing local model files.`;
+        }
+        if (!selectedModelLoaded) {
+            return "Load the selected model before running it.";
+        }
+        if (promptInput.trim().length === 0) {
+            return "Enter a prompt before running the model.";
+        }
+        if (Number(cannyLowThreshold) > Number(cannyHighThreshold)) {
+            return "Canny low threshold must be less than or equal to the high threshold.";
+        }
+        if (isControlNet && referenceImageDataUrl.length === 0) {
+            return "Choose a reference image before running ControlNet-Canny.";
+        }
+        return null;
+    }
+
+    async function refreshSupportedModels() {
+        try {
+            isRefreshingModels = true;
+            const requestId = await getSupportedModels();
+            const event = await waitForEngineEvent(requestId);
+
+            if (event.type === "done" && Array.isArray(event.data?.models)) {
+                supportedModels = event.data.models;
+                syncSelectedModel();
+                lastError = null;
+                return;
+            }
+
+            if (event.type === "error") {
+                lastError = event.data;
+            }
+        } catch (error) {
+            lastError = normalizeError(error);
+        } finally {
+            isRefreshingModels = false;
+        }
+    }
+
+    async function loadSelectedModel() {
+        if (isLoadingModel || !selectedModelInstalled || selectedModelLoaded) {
+            return;
+        }
+
+        try {
+            lastError = null;
+            isLoadingModel = true;
+            const requestId = await loadModel(selectedModelId);
+            const event = await waitForEngineEvent(requestId);
+
+            if (event.type === "done" && typeof event.data?.loaded === "string") {
+                if (!modelIsLoaded(event.data.loaded)) {
+                    loadedModelIds = [...loadedModelIds, event.data.loaded];
+                }
+                syncSelectedModel();
+                return;
+            }
+
+            if (event.type === "error") {
+                lastError = event.data;
+            }
+        } catch (error) {
+            lastError = normalizeError(error);
+        } finally {
+            isLoadingModel = false;
+        }
+    }
+
+    async function clearLoaded() {
+        try {
+            lastError = null;
+            const requestId = await clearLoadedModels();
+            const event = await waitForEngineEvent(requestId);
+
+            if (event.type === "done") {
+                loadedModelIds = [];
+                syncSelectedModel();
+                flowOutput = null;
+                return;
+            }
+
+            if (event.type === "error") {
+                lastError = event.data;
+            }
+        } catch (error) {
+            lastError = normalizeError(error);
+        }
+    }
+
+    function buildModelInput(): TextToImageInput | ControlNetCannyInput {
+        const baseInput: TextToImageInput = {
+            prompt: promptInput.trim(),
+            num_steps: Number(numSteps),
+            guidance_scale: Number(guidanceScale),
+            seed: Number(seed),
+        };
+
+        if (!isControlNet) return baseInput;
+
+        return {
+            ...baseInput,
+            image_data_url: referenceImageDataUrl,
+            canny_low_threshold: Number(cannyLowThreshold),
+            canny_high_threshold: Number(cannyHighThreshold),
+        };
+    }
+
+    async function executeModel() {
+        const validationError = getValidationError();
+        if (validationError) {
+            lastError = { message: validationError };
+            return;
+        }
+
+        try {
+            flowOutput = null;
+            lastError = null;
+            isRunning = true;
+            const requestId = await runModel(selectedModelId, buildModelInput());
+            const event = await waitForEngineEvent(requestId);
+
+            if (event.type === "done") {
+                flowOutput = event.data;
+                return;
+            }
+
+            if (event.type === "error") {
+                lastError = event.data;
+            }
+        } catch (error) {
+            lastError = normalizeError(error);
+        } finally {
+            isRunning = false;
+        }
+    }
 
     function randomizeSeed() {
         seed = Math.floor(Math.random() * (MAX_SEED + 1));
-    };
+    }
 
-    function buildFlowInput(): string | TextToImageInput {
-        if (!isTextToImageFlow) {
-            return flowInput;
+    function handleModelChange(event: Event) {
+        selectedModelId = (event.target as HTMLSelectElement).value;
+        syncSelectedModel();
+    }
+
+    function resetReferenceImage(clearInput = true) {
+        referenceImageDataUrl = "";
+        referenceImageName = "";
+        referenceImageSize = 0;
+        referenceImageType = "";
+
+        if (clearInput && referenceImageInput) {
+            referenceImageInput.value = "";
+        }
+    }
+
+    function isSupportedImageFile(file: File): boolean {
+        if (file.type.startsWith("image/")) return true;
+
+        return /\.(apng|avif|bmp|gif|jpe?g|png|webp)$/i.test(file.name);
+    }
+
+    function setReferenceImageFromFile(file: File) {
+        if (!isSupportedImageFile(file)) {
+            resetReferenceImage();
+            lastError = { message: "Choose an image file for ControlNet-Canny." };
+            return;
         }
 
-        return {
-            prompt: promptInput.trim(),
-            num_steps: numSteps,
-            guidance_scale: guidanceScale,
-            seed,
+        const reader = new FileReader();
+        reader.onload = () => {
+            if (typeof reader.result !== "string") {
+                resetReferenceImage();
+                lastError = { message: "Failed to read the reference image." };
+                return;
+            }
+
+            referenceImageDataUrl = reader.result;
+            referenceImageName = file.name;
+            referenceImageSize = file.size;
+            referenceImageType = file.type || "image";
+            lastError = null;
         };
-    };
+        reader.onerror = () => {
+            resetReferenceImage();
+            lastError = { message: "Failed to read the reference image." };
+        };
+        reader.readAsDataURL(file);
+    }
 
-    function executeFlow() {
-        if (!canRunFlow) return;
-        isRunning = true;
-        const flow = flowNodes.map((n) => ({ model_id: n.repo_id, task: n.task }));
-        runFlow(flow, buildFlowInput());
-    };
+    function handleReferenceImageChange(event: Event) {
+        const input = event.target as HTMLInputElement;
+        const file = input.files?.[0];
 
-    // Format output for display
+        if (!file) {
+            resetReferenceImage(false);
+            return;
+        }
+
+        setReferenceImageFromFile(file);
+    }
+
+    function formatFileSize(bytes: number): string {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    }
+
     function formatOutput(data: any): string {
         if (data === null || data === undefined) return "";
         if (typeof data === "string") return data;
         return JSON.stringify(data, null, 2);
-    };
+    }
 
-    // Detect if output is an image (base64 or URL)
-    function isImageOutput(data: any): boolean {
-        if (!data?.outputs) return false;
-        const out = data.outputs;
-        if (typeof out === "string") {
-            return out.startsWith("data:image") || out.startsWith("http");
-        }
-        // HF pipeline text-to-image returns [{ "generated_image": ... }] or similar
-        if (Array.isArray(out) && out[0]?.url) return true;
-        return false;
-    };
+    function isImageOutput(data: FlowOutput): boolean {
+        const output = data?.outputs;
+        return typeof output === "string" && output.startsWith("data:image");
+    }
 
     onMount(() => {
-        getInstalledModels();
+        void refreshSupportedModels();
     });
 </script>
 
 <div class="diagram-container">
-
     <div class="tool-bar">
-        <select bind:value={selectedTask}>
-            <option value="" disabled>Select task</option>
-            {#each TASKS as task}
-                <option value={task}>{task}</option>
+        <select value={selectedModelId} on:change={handleModelChange}>
+            {#each supportedModels as model}
+                <option value={model.id}>{model.label}</option>
             {/each}
         </select>
 
-        <select bind:value={selectedModel}>
-            <option value="" disabled>Select model</option>
-            {#each installedModels.filter(m => !selectedTask || m.task === selectedTask) as m}
-                <option value={m.repo_id}>{m.repo_id}</option>
-            {/each}
-        </select>
-
-        <button on:click={addModel} disabled={!selectedModel || !selectedTask}>
-            Add to flow
+        <button
+            on:click={loadSelectedModel}
+            disabled={!selectedModelInstalled || selectedModelLoaded || isLoadingModel}
+        >
+            {#if isLoadingModel}
+                Loading...
+            {:else if selectedModelLoaded}
+                Loaded
+            {:else}
+                Load model
+            {/if}
         </button>
 
-        <button on:click={handleClear} disabled={flowNodes.length === 0}>
+        <button on:click={clearLoaded} disabled={loadedModelIds.length === 0}>
             Clear loaded
         </button>
 
         <button
             class="run-btn"
-            on:click={executeFlow}
-            disabled={!canRunFlow || isRunning}
+            on:click={executeModel}
+            disabled={isRunning || !selectedModelLoaded || !selectedModelInstalled}
         >
-            {#if isRunning}
-                <span class="spinner">Running…</span>
-            {:else}
-                ▶ Run flow
-            {/if}
+            {isRunning ? "Running..." : "Run"}
         </button>
     </div>
 
-    <div class="diagram">
-        {#if flowNodes.length === 0}
-            <p class="empty-hint">Add a model above to build your flow.</p>
-        {:else}
-            {#each flowNodes as node, i}
-                {#if i > 0}
-                    <div class="connector">→</div>
-                {/if}
+    {#if isRefreshingModels}
+        <p>Loading supported models...</p>
+    {/if}
 
-                <div class="flow-node" class:loaded={node.loaded}>
-                    <span class="node-task">{node.task}</span>
-                    <span class="node-id">{node.repo_id}</span>
-                    <span class="node-status">{node.loaded ? "✓ loaded" : "loading…"}</span>
-                    <button class="node-remove" on:click={() => removeNode(node.repo_id)}>✕</button>
-                </div>
-            {/each}
-        {/if}
+    {#if !selectedModelInstalled}
+        <div class="output-error">
+            {selectedModel.label} is missing local model files.
+        </div>
+    {/if}
+
+    <div class="diagram">
+        <div class="flow-node" class:loaded={selectedModelLoaded}>
+            <span class="node-task">{selectedModel.task}</span>
+            <span class="node-id">{selectedModel.label}</span>
+            <span class="node-status">{selectedModelLoaded ? "loaded" : "not loaded"}</span>
+        </div>
     </div>
 
     <div class="io-panel">
         <div class="io-input">
-            {#if isTextToImageFlow}
-                <label for="prompt-input">Prompt</label>
-                <textarea
-                    id="prompt-input"
-                    bind:value={promptInput}
-                    rows="4"
-                    placeholder="Describe the image you want to generate…"
-                />
+            <label for="prompt-input">Prompt</label>
+            <textarea
+                id="prompt-input"
+                bind:value={promptInput}
+                rows="4"
+                placeholder="Describe the image you want to generate..."
+            />
 
-                <div class="parameter-grid">
-                    <div class="parameter-field">
-                        <div class="parameter-label-row">
-                            <label for="steps-input">Number of steps</label>
-                            <span class="parameter-value">{numSteps}</span>
-                        </div>
-                        <input
-                            id="steps-input"
-                            type="range"
-                            bind:value={numSteps}
-                            min="1"
-                            max="50"
-                            step="1"
-                        />
-                    </div>
-
-                    <div class="parameter-field">
-                        <div class="parameter-label-row">
-                            <label for="guidance-input">Guidance scale</label>
-                            <span class="parameter-value">{guidanceScale.toFixed(1)}</span>
-                        </div>
-                        <input
-                            id="guidance-input"
-                            type="range"
-                            bind:value={guidanceScale}
-                            min="0"
-                            max="20"
-                            step="0.5"
-                        />
-                    </div>
-
-                    <div class="parameter-field parameter-field-wide">
-                        <div class="parameter-label-row">
-                            <label for="seed-input">Seed</label>
-                            <span class="parameter-value">{seed}</span>
-                        </div>
-                        <div class="seed-row">
-                            <input
-                                id="seed-input"
-                                type="number"
-                                bind:value={seed}
-                                min="0"
-                                max={MAX_SEED}
-                                step="1"
-                            />
-                            <button type="button" class="seed-randomize" on:click={randomizeSeed}>
-                                Randomize
+            {#if isControlNet}
+                <div class="image-import-panel">
+                    <div class="parameter-label-row">
+                        <label for="reference-image-input">Reference image</label>
+                        {#if referenceImageDataUrl}
+                            <button
+                                type="button"
+                                class="image-remove-button"
+                                on:click={() => resetReferenceImage()}
+                            >
+                                Remove
                             </button>
+                        {/if}
+                    </div>
+
+                    <input
+                        bind:this={referenceImageInput}
+                        id="reference-image-input"
+                        type="file"
+                        accept="image/*"
+                        on:change={handleReferenceImageChange}
+                    />
+
+                    {#if referenceImageDataUrl}
+                        <div class="image-preview">
+                            <img src={referenceImageDataUrl} alt="Reference preview" />
+                            <div class="image-meta">
+                                <span>{referenceImageName}</span>
+                                <span>{referenceImageType} - {formatFileSize(referenceImageSize)}</span>
+                            </div>
                         </div>
+                    {/if}
+                </div>
+            {/if}
+
+            <div class="parameter-grid">
+                <div class="parameter-field">
+                    <div class="parameter-label-row">
+                        <label for="steps-input">Number of steps</label>
+                        <span class="parameter-value">{numSteps}</span>
+                    </div>
+                    <input id="steps-input" type="range" bind:value={numSteps} min="1" max="50" step="1" />
+                </div>
+
+                <div class="parameter-field">
+                    <div class="parameter-label-row">
+                        <label for="guidance-input">Guidance scale</label>
+                        <span class="parameter-value">{Number(guidanceScale).toFixed(1)}</span>
+                    </div>
+                    <input id="guidance-input" type="range" bind:value={guidanceScale} min="0" max="20" step="0.5" />
+                </div>
+
+                <div class="parameter-field parameter-field-wide">
+                    <div class="parameter-label-row">
+                        <label for="seed-input">Seed</label>
+                        <span class="parameter-value">{seed}</span>
+                    </div>
+                    <div class="seed-row">
+                        <input id="seed-input" type="number" bind:value={seed} min="0" max={MAX_SEED} step="1" />
+                        <button type="button" class="seed-randomize" on:click={randomizeSeed}>
+                            Randomize
+                        </button>
                     </div>
                 </div>
-            {:else}
-                <label for="flow-input">Input</label>
-                <input
-                    id="flow-input"
-                    bind:value={flowInput}
-                    placeholder="Enter prompt or data…"
-                />
-            {/if}
+
+                {#if isControlNet}
+                    <div class="parameter-field">
+                        <div class="parameter-label-row">
+                            <label for="canny-low-input">Canny low threshold</label>
+                            <span class="parameter-value">{cannyLowThreshold}</span>
+                        </div>
+                        <input id="canny-low-input" type="range" bind:value={cannyLowThreshold} min="0" max="255" step="1" />
+                    </div>
+
+                    <div class="parameter-field">
+                        <div class="parameter-label-row">
+                            <label for="canny-high-input">Canny high threshold</label>
+                            <span class="parameter-value">{cannyHighThreshold}</span>
+                        </div>
+                        <input id="canny-high-input" type="range" bind:value={cannyHighThreshold} min="0" max="255" step="1" />
+                    </div>
+                {/if}
+            </div>
         </div>
 
         <div class="io-output" class:has-content={!!flowOutput || !!lastError}>
-            <label class="io-label" for="id">
+            <label class="io-label" for="output">
                 Output
                 {#if flowOutput}
                     <span class="output-badge">done</span>
@@ -303,9 +513,8 @@
             <div class="output-body">
                 {#if isRunning}
                     <div class="output-running">
-                        <span class="spinner-large">Processing flow…</span>
+                        <span class="spinner-large">Processing...</span>
                     </div>
-
                 {:else if lastError}
                     <pre class="output-error">{lastError.message ?? formatOutput(lastError)}</pre>
                     {#if lastError.trace}
@@ -314,29 +523,16 @@
                             <pre class="output-trace">{lastError.trace}</pre>
                         </details>
                     {/if}
-
                 {:else if flowOutput}
                     {#if isImageOutput(flowOutput)}
-                        <!-- Image output (text-to-image pipelines) -->
-                        {#if typeof flowOutput.outputs === "string"}
-                            <img class="output-image" src={flowOutput.outputs} alt="Generated output" />
-                        {:else if Array.isArray(flowOutput.outputs)}
-                            {#each flowOutput.outputs as item}
-                                {#if item?.url}
-                                    <img class="output-image" src={item.url} alt="Generated output" />
-                                {/if}
-                            {/each}
-                        {/if}
+                        <img class="output-image" src={flowOutput.outputs} alt="Generated output" />
                     {:else}
-                        <!-- Text / JSON output -->
                         <pre class="output-text">{formatOutput(flowOutput.outputs)}</pre>
                     {/if}
-
                 {:else}
-                    <p class="output-placeholder">Output will appear here after the flow runs.</p>
+                    <p class="output-placeholder">Output will appear here after the model runs.</p>
                 {/if}
             </div>
         </div>
     </div>
-
 </div>
