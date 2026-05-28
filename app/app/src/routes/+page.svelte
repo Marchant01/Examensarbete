@@ -1,3 +1,7 @@
-<main class="root-main">
-    <h1>Welcome to the studio</h1>
+<script>
+    import Diagram from "$lib/components/diagram.svelte";
+</script>
+
+<main class="flow-main">
+    <Diagram/>
 </main>

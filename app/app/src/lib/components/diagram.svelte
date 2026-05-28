@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from "svelte";
+    import { onDestroy, onMount } from "svelte";
     import { get } from "svelte/store";
     import {
         CONTROLNET_CANNY_MODEL_ID,
@@ -76,6 +76,9 @@
     let isRefreshingModels = false;
     let flowOutput: FlowOutput = null;
     let lastError: any = null;
+    let generationStartedAt = 0;
+    let generationElapsedMs = 0;
+    let generationTimer: ReturnType<typeof setInterval> | null = null;
 
     function waitForEngineEvent(id: string): Promise<EngineEvent> {
         const existingEvent = get(engineEvents).find((event) => event?.id === id);
@@ -122,6 +125,44 @@
 
     function normalizeError(error: unknown) {
         return { message: error instanceof Error ? error.message : String(error) };
+    }
+
+    function updateGenerationElapsed() {
+        if (generationStartedAt === 0) return;
+        generationElapsedMs = performance.now() - generationStartedAt;
+    }
+
+    function startGenerationTimer() {
+        stopGenerationTimer();
+        generationStartedAt = performance.now();
+        generationElapsedMs = 0;
+        generationTimer = setInterval(updateGenerationElapsed, 100);
+    }
+
+    function stopGenerationTimer() {
+        if (generationTimer) {
+            clearInterval(generationTimer);
+            generationTimer = null;
+        }
+        updateGenerationElapsed();
+    }
+
+    function resetGenerationTimer() {
+        stopGenerationTimer();
+        generationStartedAt = 0;
+        generationElapsedMs = 0;
+    }
+
+    function formatElapsedTime(milliseconds: number): string {
+        const totalSeconds = Math.max(0, milliseconds / 1000);
+
+        if (totalSeconds < 60) {
+            return `${totalSeconds.toFixed(1)}s`;
+        }
+
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = Math.floor(totalSeconds % 60);
+        return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
     }
 
     function getValidationError(): string | null {
@@ -205,6 +246,7 @@
                 loadedModelIds = [];
                 syncSelectedModel();
                 flowOutput = null;
+                resetGenerationTimer();
                 return;
             }
 
@@ -235,6 +277,7 @@
     }
 
     async function executeModel() {
+        resetGenerationTimer();
         const validationError = getValidationError();
         if (validationError) {
             lastError = { message: validationError };
@@ -245,6 +288,7 @@
             flowOutput = null;
             lastError = null;
             isRunning = true;
+            startGenerationTimer();
             const requestId = await runModel(selectedModelId, buildModelInput());
             const event = await waitForEngineEvent(requestId);
 
@@ -259,6 +303,7 @@
         } catch (error) {
             lastError = normalizeError(error);
         } finally {
+            stopGenerationTimer();
             isRunning = false;
         }
     }
@@ -348,6 +393,10 @@
 
     onMount(() => {
         void refreshSupportedModels();
+    });
+
+    onDestroy(() => {
+        resetGenerationTimer();
     });
 </script>
 
@@ -507,6 +556,9 @@
                     <span class="output-badge error">error</span>
                 {:else if isRunning}
                     <span class="output-badge running">running</span>
+                {/if}
+                {#if generationElapsedMs > 0 || isRunning}
+                    <span class="output-timer">{formatElapsedTime(generationElapsedMs)}</span>
                 {/if}
             </label>
 
