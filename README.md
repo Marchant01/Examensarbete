@@ -5,7 +5,7 @@ generativa modeller direkt på en Windows-dator. Målet är att kunna bygga enkl
 AI-flöden i ett desktopgränssnitt och köra dem via en Python-baserad motor med
 ONNX Runtime och Qualcomm/QNN-stöd.
 
-![Uploading clipboard_2026-05-28_17-00.png…]()
+<img width="2880" height="1620" alt="clipboard_2026-05-28_17-00" src="https://github.com/user-attachments/assets/e7bd38cf-0b5d-4294-ac43-a241c3b04203" />
 
 Projektet består av två huvuddelar:
 
